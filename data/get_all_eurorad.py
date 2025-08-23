@@ -20,7 +20,7 @@ SECTIONS = [
 ]
 
 BASE_URL = "https://www.eurorad.org/case/{}/teaching-case"
-START_ID, END_ID = 18806, 18808
+START_ID, END_ID = 18806, 19164
 OUTPUT_CSV = "eurorad_cases_18806_19164.csv"
 
 # Match any section header text (case-insensitive)
@@ -166,9 +166,24 @@ def main():
     fieldnames = ["case_id"] + SECTIONS
     total = END_ID - START_ID + 1
 
-    html = fetch_html(session, 18806)
-    print("status_ok=", bool(html), "has_clinical=", ("CLINICAL" in (html or "") or "Clinical" in (html or "")))
-    print((html or "")[:1200])
+    with open(OUTPUT_CSV, "w", newline="", encoding="utf-8", buffering=1) as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader(); f.flush()
+
+        ok = 0
+        pbar = tqdm(range(START_ID, END_ID + 1), desc="Scraping cases", total=total)
+        for i, cid in enumerate(pbar, 1):
+            row = scrape_case(session, cid)
+            if row:
+                w.writerow(row)
+                ok += 1
+                if ok % 10 == 0: f.flush()
+            pbar.set_postfix_str(f"ok={ok}")
+
+            polite_sleep()
+            if i % 20 == 0:
+                time.sleep(random.uniform(8, 15))
+                f.flush()
 
 if __name__ == "__main__":
     main()
