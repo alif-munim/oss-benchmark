@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# benchmarks/hf_bench_dataset.py
+# benchmarks/hf_bench.py
 #
 # Run GPT-OSS (20B or 120B) via Hugging Face Inference Providers on a CSV.
 # Resumable: re-runs only rows that are empty, unparsable, or errored.
@@ -7,7 +7,7 @@
 #
 # Usage (20B Fireworks):
 #   export HF_TOKEN=hf_...
-#   python benchmarks/hf_bench_dataset.py data/datasets/ophthalmology.csv \
+#   python benchmarks/hf_bench.py data/datasets/ophthalmology.csv \
 #     --model openai/gpt-oss-20b:fireworks-ai \
 #     --api chat \
 #     --reasoning_effort high \
@@ -16,7 +16,7 @@
 #     --results results
 #
 # Resume on the SAME output file (re-run only missing/errored rows):
-#   python benchmarks/hf_bench_dataset.py results/ophthalmology_openai-gpt-oss-20b-fireworks-ai_chat_re-high_max2048.csv \
+#   python benchmarks/hf_bench.py results/ophthalmology_openai-gpt-oss-20b-fireworks-ai_chat_re-high_max2048.csv \
 #     --model openai/gpt-oss-20b:fireworks-ai \
 #     --api chat \
 #     --reasoning_effort high \

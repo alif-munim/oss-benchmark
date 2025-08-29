@@ -10,25 +10,30 @@ pip install cloudscraper beautifulsoup4
 Official OpenAI API example, GPT-4o batch
 ```
 python benchmarks/eurorad/gpt.py --mode batch --debug
+
+python benchmarks/eurorad/gpt.py --mode chat --chat-model gpt-5 --debug
+
+python benchmarks/eurorad/gpt.py --mode responses --effort high --debug
 ```
 
 GPT-OSS example (official HuggingFace API)
 ```
 python benchmarks/eurorad/hf_bench.py \
   /home/bowang/Documents/alif/oss-benchmark/data/datasets/eurorad_test.csv \
-  --model openai/gpt-oss-20b:fireworks-ai \
+  --model openai/gpt-oss-120b:fireworks-ai \
   --api chat \
-  --reasoning_effort medium \
+  --reasoning_effort high \
   --max_output_tokens 8192 \
   --workers 1 \
-  --results /home/bowang/Documents/alif/oss-benchmark/results
+  --results /home/bowang/Documents/alif/oss-benchmark/results \
+  --resume
 ```
 
 Openrouter Example
 ```
 python benchmarks/eurorad/openrouter.py \
   /home/bowang/Documents/alif/oss-benchmark/data/datasets/eurorad_test.csv \
-  --endpoint qwen/qwen3-30b-a3b-instruct-2507 \
+  --endpoint deepseek/deepseek-r1-0528 \
   --results_dir /home/bowang/Documents/alif/oss-benchmark/results \
   --max_output_tokens 8192 \
   --workers 1 \

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# benchmarks/gpt5.py
+# benchmarks/gpt.py
 # Modes:
 #   responses -> gpt-5 via Responses API (reasoning effort)
 #   batch     -> gpt-4o via Batch API (all questions)
