@@ -6,7 +6,36 @@ Benchmarking OSS model performance on-device for medical tasks.
 pip install cloudscraper beautifulsoup4
 ```
 
-### Benchmarking
+### Benchmarking Eurorad
+Official OpenAI API example, GPT-4o batch
+```
+python benchmarks/eurorad/gpt.py --mode batch --debug
+```
+
+GPT-OSS example (official HuggingFace API)
+```
+python benchmarks/eurorad/hf_bench.py \
+  /home/bowang/Documents/alif/oss-benchmark/data/datasets/eurorad_test.csv \
+  --model openai/gpt-oss-20b:fireworks-ai \
+  --api chat \
+  --reasoning_effort medium \
+  --max_output_tokens 8192 \
+  --workers 1 \
+  --results /home/bowang/Documents/alif/oss-benchmark/results
+```
+
+Openrouter Example
+```
+python benchmarks/eurorad/openrouter.py \
+  /home/bowang/Documents/alif/oss-benchmark/data/datasets/eurorad_test.csv \
+  --endpoint qwen/qwen3-30b-a3b-instruct-2507 \
+  --results_dir /home/bowang/Documents/alif/oss-benchmark/results \
+  --max_output_tokens 8192 \
+  --workers 1 \
+  --resume
+```
+
+### Benchmarking Ophthalmology
 
 gpt-4o / gpt-5
 ```
@@ -106,7 +135,7 @@ python benchmarks/ophthalmology/novita.py data/datasets/ophthalmology.csv \
 OpenRouter
 ```
 python benchmarks/ophthalmology/openrouter.py data/datasets/ophthalmology.csv \
-  --endpoint qwen/qwen3-30b-a3b-instruct-2507 \
+  --endpoint z-ai/glm-4.5-air \
   --results_dir results \
   --workers 1 \
   --resume
