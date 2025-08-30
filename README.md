@@ -6,6 +6,51 @@ Benchmarking OSS model performance on-device for medical tasks.
 pip install cloudscraper beautifulsoup4
 ```
 
+### Benchmarking NMED
+
+OpenAI
+```
+python benchmarks/nmed-notes-score/gpt.py --mode batch --debug \
+  --dataset /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_diagnosis.csv \
+
+python benchmarks/nmed-notes-score/gpt.py --mode chat --chat-model gpt-5 --debug \
+  --dataset /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_diagnosis.csv \
+
+python benchmarks/nmed-notes-score/gpt.py --mode responses --effort high --debug \
+  --dataset /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_diagnosis.csv \
+  --resume
+
+python3 benchmarks/nmed-notes-score/gpt.py \
+  --mode chat \
+  --chat-model gpt-5-2025-08-07 \
+  --dataset /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_diagnosis.csv \
+  --results-dir /home/bowang/Documents/alif/oss-benchmark/results
+
+
+GPT-OSS HuggingFace
+```
+python benchmarks/nmed-notes-score/hf_bench.py \
+  /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_diagnosis.csv \
+  --model openai/gpt-oss-120b:fireworks-ai \
+  --api chat \
+  --reasoning_effort low \
+  --max_output_tokens 8192 \
+  --workers 1 \
+  --results /home/bowang/Documents/alif/oss-benchmark/results \
+  --resume
+```
+
+Openrouter
+```
+python benchmarks/nmed-notes-score/openrouter.py \
+  /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_diagnosis.csv \
+  --endpoint deepseek/deepseek-r1-0528 \
+  --results_dir /home/bowang/Documents/alif/oss-benchmark/results \
+  --max_output_tokens 8192 \
+  --workers 1 \
+  --resume
+```
+
 ### Benchmarking Eurorad
 Official OpenAI API example, GPT-4o batch
 ```
@@ -13,7 +58,14 @@ python benchmarks/eurorad/gpt.py --mode batch --debug
 
 python benchmarks/eurorad/gpt.py --mode chat --chat-model gpt-5 --debug
 
-python benchmarks/eurorad/gpt.py --mode responses --effort high --debug
+python benchmarks/eurorad/gpt.py --mode responses --effort low --debug
+
+python3 benchmarks/eurorad/gpt.py \
+  --mode chat \
+  --chat-model gpt-5-2025-08-07 \
+  --dataset /home/bowang/Documents/alif/oss-benchmark/data/datasets/eurorad_test.csv \
+  --results-dir /home/bowang/Documents/alif/oss-benchmark/results
+
 ```
 
 GPT-OSS example (official HuggingFace API)
@@ -55,6 +107,10 @@ python benchmarks/ophthalmology/gpt.py --mode responses --effort low --debug
 
 # Batch API (gpt-4o)
 python benchmarks/ophthalmology/gpt.py --mode batch --debug
+
+python3 benchmarks/ophthalmology/gpt.py \
+  --mode chat \
+  --chat-model gpt-5-2025-08-07
 ```
 
 gpt-oss-20b
