@@ -18,7 +18,7 @@ import argparse
 import unicodedata
 import difflib
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 from openai import OpenAI
 from tqdm import tqdm
 
@@ -101,6 +101,28 @@ def build_user_prompt(case_id: str, post_desc: str, options: List[str]) -> str:
     )
 
 # -------------------------
+# Output path resolver
+# -------------------------
+def resolve_out_csv(results_dir: Path, default_filename: str, output_csv: Optional[Path]) -> Path:
+    """
+    If output_csv is provided:
+      - Ensure .csv suffix.
+      - If relative, place under results_dir.
+      - Create parent directories.
+    Otherwise, use results_dir/default_filename.
+    """
+    if output_csv is not None:
+        p = Path(output_csv)
+        if p.suffix.lower() != ".csv":
+            p = p.with_suffix(".csv")
+        if not p.is_absolute():
+            p = results_dir / p
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return p
+    results_dir.mkdir(parents=True, exist_ok=True)
+    return results_dir / default_filename
+
+# -------------------------
 # Responses API (gpt-5)
 # -------------------------
 def ask_model_responses(client: OpenAI, user_prompt: str, effort: str, debug: bool) -> Tuple[str, str]:
@@ -131,14 +153,14 @@ def ask_model_responses(client: OpenAI, user_prompt: str, effort: str, debug: bo
             })
     return answer, note
 
-def run_responses_mode(dataset_csv: Path, results_dir: Path, effort: str, debug: bool):
+def run_responses_mode(dataset_csv: Path, results_dir: Path, effort: str, debug: bool, output_csv: Optional[Path]):
     client = OpenAI()
     with open(dataset_csv, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
 
     dataset_name = dataset_csv.stem
-    out_csv = results_dir / f"{dataset_name}_{MODEL_GPT5}_{effort}.csv"
-    results_dir.mkdir(parents=True, exist_ok=True)
+    default_name = f"{dataset_name}_{MODEL_GPT5}_{effort}.csv"
+    out_csv = resolve_out_csv(results_dir, default_name, output_csv)
 
     add_cols = ["Model Answer", "Model Answer (raw)", "Match Type", "Correct", "Options", "Model", "Reasoning Effort", "Note"]
     fieldnames = list(rows[0].keys()) + [c for c in add_cols if c not in rows[0].keys()]
@@ -247,7 +269,7 @@ def extract_answer_from_choice(choice_obj: dict) -> str:
     except Exception:
         return ""
 
-def run_batch_mode(dataset_csv: Path, results_dir: Path, debug: bool):
+def run_batch_mode(dataset_csv: Path, results_dir: Path, debug: bool, output_csv: Optional[Path]):
     client = OpenAI()
     results_dir.mkdir(parents=True, exist_ok=True)
 
@@ -283,7 +305,9 @@ def run_batch_mode(dataset_csv: Path, results_dir: Path, debug: bool):
         except Exception:
             answers[cid] = ""
 
-    out_csv = results_dir / f"{dataset_name}_{MODEL_GPT4O}_batch.csv"
+    default_name = f"{dataset_name}_{MODEL_GPT4O}_batch.csv"
+    out_csv = resolve_out_csv(results_dir, default_name, output_csv)
+
     add_cols = ["Model Answer", "Model Answer (raw)", "Match Type", "Correct", "Options", "Model", "Reasoning Effort", "Note"]
     fieldnames = list(rows[0].keys()) + [c for c in add_cols if c not in rows[0].keys()]
 
@@ -343,14 +367,14 @@ def ask_model_chat(client: OpenAI, model: str, user_prompt: str, debug: bool) ->
         print(resp)
     return (resp.choices[0].message.content or "").strip()
 
-def run_chat_mode(dataset_csv: Path, results_dir: Path, chat_model: str, debug: bool):
+def run_chat_mode(dataset_csv: Path, results_dir: Path, chat_model: str, debug: bool, output_csv: Optional[Path]):
     client = OpenAI()
     with open(dataset_csv, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
 
     dataset_name = dataset_csv.stem
-    results_dir.mkdir(parents=True, exist_ok=True)
-    out_csv = results_dir / f"{dataset_name}_{chat_model}_chat.csv"
+    default_name = f"{dataset_name}_{chat_model}_chat.csv"
+    out_csv = resolve_out_csv(results_dir, default_name, output_csv)
 
     add_cols = ["Model Answer", "Model Answer (raw)", "Match Type", "Correct", "Options", "Model", "Reasoning Effort", "Note"]
     fieldnames = list(rows[0].keys()) + [c for c in add_cols if c not in rows[0].keys()]
@@ -407,15 +431,18 @@ def main():
     ap.add_argument("--chat-model", default="gpt-5", help="Model for chat mode (e.g., gpt-5, gpt-4o).")
     ap.add_argument("--dataset", type=Path, default=DEFAULT_DATASET, help="Path to dataset CSV.")
     ap.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS, help="Directory to write outputs.")
+    ap.add_argument("--output-csv", type=Path, default=None,
+                    help="Explicit output CSV filename. If relative, it is placed under --results-dir. "
+                         "The .csv suffix is auto-added if missing.")
     ap.add_argument("--debug", action="store_true")
     args = ap.parse_args()
 
     if args.mode == "responses":
-        run_responses_mode(args.dataset, args.results_dir, args.effort, args.debug)
+        run_responses_mode(args.dataset, args.results_dir, args.effort, args.debug, args.output_csv)
     elif args.mode == "chat":
-        run_chat_mode(args.dataset, args.results_dir, args.chat_model, args.debug)
+        run_chat_mode(args.dataset, args.results_dir, args.chat_model, args.debug, args.output_csv)
     else:
-        run_batch_mode(args.dataset, args.results_dir, args.debug)
+        run_batch_mode(args.dataset, args.results_dir, args.debug, args.output_csv)
 
 if __name__ == "__main__":
     main()

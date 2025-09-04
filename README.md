@@ -11,14 +11,13 @@ pip install cloudscraper beautifulsoup4
 OpenAI
 ```
 python benchmarks/nmed-notes-score/gpt.py --mode batch --debug \
-  --dataset /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_diagnosis.csv \
+  --dataset /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_diagnosis.csv
 
-python benchmarks/nmed-notes-score/gpt.py --mode chat --chat-model gpt-5 --debug \
-  --dataset /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_diagnosis.csv \
+python benchmarks/nmed-notes-score/gpt.py --mode chat --chat-model gpt-4o --debug \
+  --dataset /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_diagnosis.csv
 
-python benchmarks/nmed-notes-score/gpt.py --mode responses --effort high --debug \
-  --dataset /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_diagnosis.csv \
-  --resume
+python benchmarks/nmed-notes-score/gpt.py --mode responses --effort low --debug \
+  --dataset /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_diagnosis.csv
 
 python3 benchmarks/nmed-notes-score/gpt.py \
   --mode chat \
@@ -44,7 +43,7 @@ Openrouter
 ```
 python benchmarks/nmed-notes-score/openrouter.py \
   /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_diagnosis.csv \
-  --endpoint deepseek/deepseek-r1-0528 \
+  --endpoint qwen/qwen3-235b-a22b-2507 \
   --results_dir /home/bowang/Documents/alif/oss-benchmark/results \
   --max_output_tokens 8192 \
   --workers 1 \
@@ -64,8 +63,8 @@ python3 benchmarks/eurorad/gpt.py \
   --mode chat \
   --chat-model gpt-5-2025-08-07 \
   --dataset /home/bowang/Documents/alif/oss-benchmark/data/datasets/eurorad_test.csv \
-  --results-dir /home/bowang/Documents/alif/oss-benchmark/results
-
+  --results-dir /home/bowang/Documents/alif/oss-benchmark/results \
+  --output-csv eurorad_gpt-5-2025-08-07_v1.csv
 ```
 
 GPT-OSS example (official HuggingFace API)
@@ -78,14 +77,15 @@ python benchmarks/eurorad/hf_bench.py \
   --max_output_tokens 8192 \
   --workers 1 \
   --results /home/bowang/Documents/alif/oss-benchmark/results \
-  --resume
+  --resume \
+  --output_csv eurorad_test_openai-gpt-oss-120b-fireworks-ai_chat_re-high_max8192_v2b.csv
 ```
 
 Openrouter Example
 ```
 python benchmarks/eurorad/openrouter.py \
   /home/bowang/Documents/alif/oss-benchmark/data/datasets/eurorad_test.csv \
-  --endpoint deepseek/deepseek-r1-0528 \
+  --endpoint qwen/qwen3-235b-a22b-2507 \
   --results_dir /home/bowang/Documents/alif/oss-benchmark/results \
   --max_output_tokens 8192 \
   --workers 1 \
@@ -196,7 +196,7 @@ python benchmarks/ophthalmology/novita.py data/datasets/ophthalmology.csv \
 OpenRouter
 ```
 python benchmarks/ophthalmology/openrouter.py data/datasets/ophthalmology.csv \
-  --endpoint z-ai/glm-4.5-air \
+  --endpoint qwen/qwen3-235b-a22b-2507 \
   --results_dir results \
   --workers 1 \
   --resume
@@ -248,4 +248,11 @@ python data/get_case_eurorad.py https://www.eurorad.org/case/18706
 Get all 2025 cases
 ```
 python data/get_range_eurorad.py --start 18806 --end 19164 --outdir eurorad_csvs
+python data/combine_cases_csv.py --indir eurorad_csvs --out eurorad_cases_wide.csv
+```
+
+### Finetuning
+```
+conda activate oss
+CUDA_VISIBLE_DEVICES=0,2 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python finetune/oss20b.py
 ```
