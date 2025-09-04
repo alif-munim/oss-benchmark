@@ -71,14 +71,14 @@ GPT-OSS example (official HuggingFace API)
 ```
 python benchmarks/eurorad/hf_bench.py \
   /home/bowang/Documents/alif/oss-benchmark/data/datasets/eurorad_test.csv \
-  --model openai/gpt-oss-120b:fireworks-ai \
+  --model openai/gpt-oss-20b:fireworks-ai \
   --api chat \
   --reasoning_effort high \
   --max_output_tokens 8192 \
   --workers 1 \
   --results /home/bowang/Documents/alif/oss-benchmark/results \
   --resume \
-  --output_csv eurorad_test_openai-gpt-oss-120b-fireworks-ai_chat_re-high_max8192_v2b.csv
+  --output_csv eurorad_test_openai-gpt-oss-20b-fireworks-ai_chat_re-high_max8192_v1.csv
 ```
 
 Openrouter Example
@@ -89,7 +89,8 @@ python benchmarks/eurorad/openrouter.py \
   --results_dir /home/bowang/Documents/alif/oss-benchmark/results \
   --max_output_tokens 8192 \
   --workers 1 \
-  --resume
+  --resume \
+  --output_csv eurorad_qwen3-235b-a22b-2507_v2.csv
 ```
 
 ### Benchmarking Ophthalmology
@@ -249,6 +250,11 @@ Get all 2025 cases
 ```
 python data/get_range_eurorad.py --start 18806 --end 19164 --outdir eurorad_csvs
 python data/combine_cases_csv.py --indir eurorad_csvs --out eurorad_cases_wide.csv
+```
+
+Get train cases
+```
+python data/get_range_eurorad.py --csv data/eurorad_train_cases.csv --case-id-col "Case ID" --outdir eurorad_train_csvs --resume
 ```
 
 ### Finetuning

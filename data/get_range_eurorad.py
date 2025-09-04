@@ -1,11 +1,24 @@
 # eurorad_range_to_csv.py
-# Scrape Eurorad regular cases over an ID range and save each case to its own CSV.
-# Captures the case "Section" (e.g., "Neuroradiology") robustly (ignores breadcrumbs like "Advanced Search").
+# Scrape Eurorad regular cases and save each case to its own CSV.
 #
-# Usage:
-#   pip install cloudscraper beautifulsoup4
+# Modes:
+#   1) Range (default): --start / --end
+#   2) CSV IDs:         --csv / --case-id-col (only those Case IDs)
+#   3) Union:           --csv ... --include-range (union of CSV IDs and range)
+#
+# Extras:
+#   - tqdm progress bar by default (no per-case prints)
+#   - --debug to log per-case details instead of tqdm
+#   - --resume to skip IDs that already have an output CSV in --outdir
+#     (checks completeness, not just existence)
+#
+# Examples:
+#   pip install cloudscraper beautifulsoup4 tqdm
 #   python eurorad_range_to_csv.py --start 18806 --end 19164 --outdir eurorad_csvs
-# Defaults: start=18806 end=19164 outdir=.
+#   python eurorad_range_to_csv.py --csv cases.csv --case-id-col "Case ID" --outdir eurorad_csvs
+#   python eurorad_range_to_csv.py --csv cases.csv --include-range --start 18806 --end 18820 --outdir eurorad_csvs
+#   python eurorad_range_to_csv.py --csv cases.csv --case-id-col "Case ID" --outdir eurorad_csvs --resume
+#   python eurorad_range_to_csv.py --start 18806 --end 19164 --outdir eurorad_csvs --debug
 
 import re
 import sys
@@ -13,10 +26,11 @@ import csv
 import time
 import argparse
 from pathlib import Path
-from typing import Dict, List, Optional, Iterable
+from typing import Dict, List, Optional, Iterable, Set, Tuple
 
 import cloudscraper
 from bs4 import BeautifulSoup, Tag, NavigableString
+from tqdm import tqdm
 
 HEADINGS_CANON = {
     "clinical history": "CLINICAL HISTORY",
@@ -41,7 +55,6 @@ STOP_HEADINGS = {
     "follow us",
 }
 
-# Labels visible in the small meta block near the top of the page.
 META_LABELS = {
     "section",
     "case type",
@@ -59,7 +72,6 @@ META_LABELS = {
     "references",
 }
 
-# Breadcrumb / nav strings we must never accept as the Section value.
 DISALLOWED_SECTION_VALUES = {
     "home",
     "advanced search",
@@ -74,7 +86,6 @@ DISALLOWED_SECTION_VALUES = {
     "cases",
 }
 
-# (Optional) whitelist of common Eurorad section names for sanity checks.
 LIKELY_SECTIONS = {
     "abdominal imaging",
     "breast imaging",
@@ -87,10 +98,16 @@ LIKELY_SECTIONS = {
     "nuclear medicine",
     "paediatric radiology",
     "urogenital imaging",
+    "uroradiology & genital male imaging",
+    "uroradiology and genital male imaging",
+    "musculoskeletal system",
+    "cardiovascular",
+    "chest",
+    "paediatric",
 }
 
 PRINT_CANDIDATES = ["?print=1", "/print", "?format=print"]
-IGNORE_TAGS = {"figure", "figcaption", "aside", "footer", "table", "nav"}  # for long-text parsing
+IGNORE_TAGS = {"figure", "figcaption", "aside", "footer", "table", "nav"}  # for main content parsing
 NOISE_CLASSES = (
     "gallery", "figure", "fig", "swiper", "carousel", "thumb", "thumbnails",
     "footer", "site-footer", "site-nav", "breadcrumb"
@@ -112,9 +129,9 @@ USER_AGENT = (
     "Chrome/126.0.0.0 Safari/537.36"
 )
 
-# ---------------- fetch ----------------
+# ---------------- fetch (reused session) ----------------
 
-def make_scraper():
+def make_scraper(timeout: int) -> cloudscraper.CloudScraper:
     s = cloudscraper.create_scraper(
         browser={"browser": "chrome", "platform": "windows", "mobile": False}
     )
@@ -125,6 +142,7 @@ def make_scraper():
         "Referer": "https://www.eurorad.org/",
         "Connection": "close",
     })
+    s.request_timeout = timeout
     return s
 
 def is_bot_gate(html: str) -> bool:
@@ -132,29 +150,30 @@ def is_bot_gate(html: str) -> bool:
     return ("please wait while your request is being verified" in low
             or "<title>eurorad.org</title>" in low)
 
-def fetch_html(url: str) -> Optional[str]:
-    s = make_scraper()
-    for attempt in range(3):
+def fetch_html(sess: cloudscraper.CloudScraper, url: str, timeout: int, retries: int, backoff: float) -> Optional[str]:
+    for attempt in range(retries):
         try:
-            r = s.get(url, timeout=30)
+            r = sess.get(url, timeout=timeout)
             if r.status_code == 404:
                 return None
             r.raise_for_status()
             html = r.text
             if not is_bot_gate(html):
                 return html
-            time.sleep(1.0 * (attempt + 1))
+            time.sleep(backoff * (attempt + 1))
+        except KeyboardInterrupt:
+            raise
         except Exception:
-            time.sleep(1.0 * (attempt + 1))
+            time.sleep(backoff * (attempt + 1))
     return None
 
-def try_fetch_variants(url: str) -> Optional[str]:
-    html = fetch_html(url)
+def try_fetch_variants(sess: cloudscraper.CloudScraper, url: str, timeout: int, retries: int, backoff: float) -> Optional[str]:
+    html = fetch_html(sess, url, timeout, retries, backoff)
     if html and not is_bot_gate(html):
         return html
     for suf in PRINT_CANDIDATES:
         alt = url.rstrip("/") + suf
-        html = fetch_html(alt)
+        html = fetch_html(sess, alt, timeout, retries, backoff)
         if html and not is_bot_gate(html):
             return html
     return html
@@ -248,19 +267,17 @@ def _in_nav_or_breadcrumb(tag: Tag) -> bool:
                 return True
     return False
 
-def _valid_section(value: str) -> bool:
+def _valid_section(value: Optional[str]) -> bool:
     if not value:
         return False
     low = value.strip().lower()
     if low in DISALLOWED_SECTION_VALUES:
         return False
-    # Heuristic: Sections are short phrases, usually < 40 chars.
     if len(value) > 60:
         return False
     return True
 
 def _find_dt_dd_value_anywhere(soup: BeautifulSoup, label_re: re.Pattern) -> Optional[str]:
-    # <dl><dt>Section</dt><dd>Neuroradiology</dd>
     for dt in soup.find_all("dt"):
         if _in_nav_or_breadcrumb(dt):
             continue
@@ -273,7 +290,6 @@ def _find_dt_dd_value_anywhere(soup: BeautifulSoup, label_re: re.Pattern) -> Opt
     return None
 
 def _find_following_text_from_label(root: Tag, label_re: re.Pattern) -> Optional[str]:
-    # Find a node with own-text 'Section', then walk forward for the first acceptable value.
     for node in root.find_all(string=label_re):
         parent = node.parent if isinstance(node, NavigableString) else root
         if not isinstance(parent, Tag) or _in_nav_or_breadcrumb(parent):
@@ -285,31 +301,26 @@ def _find_following_text_from_label(root: Tag, label_re: re.Pattern) -> Optional
                 val = _text(str(nxt))
                 if not val:
                     continue
-                low = val.lower()
-                if low in META_LABELS:
-                    return None  # this label occurrence didn't have a value
+                if val.lower() in META_LABELS:
+                    return None
                 if _valid_section(val):
                     return val
             elif isinstance(nxt, Tag):
                 t = _text(nxt.get_text(" ", strip=True))
                 if not t:
                     continue
-                low = t.lower()
-                if low in META_LABELS:
+                if t.lower() in META_LABELS:
                     return None
                 if _valid_section(t):
                     return t
     return None
 
 def _regex_from_flat_text(flat: str) -> Optional[str]:
-    # Match "Section" followed by ":" or newline, then grab the next line.
-    # Use MULTILINE to anchor at line starts and avoid earlier breadcrumbs.
     m = re.search(r"(?im)^\s*Section\s*(?::|-)?\s*(.+)$", flat)
     if m:
         cand = _text(m.group(1))
         if _valid_section(cand):
             return cand
-    # If "Section" appears alone on a line, take the next non-empty line.
     lines = [l.strip() for l in flat.split("\n")]
     for i, ln in enumerate(lines):
         if ln.lower() == "section":
@@ -325,14 +336,6 @@ def _regex_from_flat_text(flat: str) -> Optional[str]:
     return None
 
 def extract_section(soup: BeautifulSoup) -> Optional[str]:
-    """
-    Order:
-      1) <meta property="article:section"> if present and valid
-      2) <dl>/<dt>Section</dt><dd>Value</dd> anywhere (excluding nav/breadcrumb)
-      3) From the main content root: scan forward after a 'Section' label
-      4) Regex over the FULL PAGE flat text (final fallback)
-      5) If candidate not in LIKELY_SECTIONS but still passes validity checks, keep it (site adds new sections occasionally)
-    """
     meta = soup.select_one('meta[property="article:section"], meta[name="article:section"]')
     if meta and meta.get("content"):
         val = _text(meta["content"])
@@ -340,25 +343,20 @@ def extract_section(soup: BeautifulSoup) -> Optional[str]:
             return val
 
     label_re = re.compile(r"^\s*Section\s*$", re.I)
-
-    # dt/dd anywhere (not only inside the root)
     val = _find_dt_dd_value_anywhere(soup, label_re)
-    if _valid_section(val or ""):
+    if _valid_section(val):
         return val
 
-    # scan from main/article root
     root = locate_content_root(soup)
     val = _find_following_text_from_label(root, label_re)
-    if _valid_section(val or ""):
+    if _valid_section(val):
         return val
 
-    # regex over FULL page text (not just root)
     flat_full = soup.get_text("\n", strip=True)
     val = _regex_from_flat_text(flat_full)
-    if _valid_section(val or ""):
+    if _valid_section(val):
         return val
 
-    # If nothing matched, try a soft guess: if any known section name appears early in the page, use it.
     head = "\n".join(flat_full.split("\n")[:120]).lower()
     for sec in LIKELY_SECTIONS:
         if re.search(rf"(^|\b){re.escape(sec)}(\b|$)", head):
@@ -366,13 +364,12 @@ def extract_section(soup: BeautifulSoup) -> Optional[str]:
 
     return None
 
-# ---------------- parse ----------------
+# ---------------- parse & scrape ----------------
 
 def parse_case(html: str, url: str) -> Dict[str, str]:
     soup = BeautifulSoup(html, "html.parser")
     data: Dict[str, str] = {"URL": url}
 
-    # Title
     title = ""
     og = soup.select_one('meta[property="og:title"]')
     if og and og.get("content"):
@@ -387,13 +384,11 @@ def parse_case(html: str, url: str) -> Dict[str, str]:
             title = ttag.get_text(strip=True)
     data["Title"] = title or ""
 
-    # Published on (scan whole page so it works in print views too)
     body_txt = soup.get_text("\n", strip=True)
     m = re.search(r"Published on\s+(\d{2}\.\d{2}\.\d{4})", body_txt, flags=re.I)
     if m:
         data["Published on"] = m.group(1)
 
-    # DOI
     m_eur = re.search(r"(10\.35100/eurorad/[^\s<>\)]+)", body_txt, flags=re.I)
     m_any = re.search(r"\b10\.\d{2,9}/[^\s<>\)]+", body_txt)
     if m_eur:
@@ -401,14 +396,12 @@ def parse_case(html: str, url: str) -> Dict[str, str]:
     elif m_any:
         data["DOI"] = m_any.group(0)
 
-    # Section
     sec = extract_section(soup)
     if sec:
         data["Section"] = sec
 
     root = locate_content_root(soup)
 
-    # Content sections
     heading_tags = ("h1", "h2", "h3", "h4", "h5", "strong")
     sections: Dict[str, List[str]] = {}
     current_key: Optional[str] = None
@@ -456,13 +449,13 @@ def parse_case(html: str, url: str) -> Dict[str, str]:
 
     return data
 
-def scrape_case(url: str) -> Optional[Dict[str, str]]:
-    html = try_fetch_variants(url)
+def scrape_case(sess: cloudscraper.CloudScraper, url: str, timeout: int, retries: int, backoff: float) -> Optional[Dict[str, str]]:
+    html = try_fetch_variants(sess, url, timeout, retries, backoff)
     if not html:
         return None
     return parse_case(html, url)
 
-# ---------------- CSV ----------------
+# ---------------- CSV output ----------------
 
 def save_to_csv_vertical(data: Dict[str, str], csv_path: Path):
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -485,43 +478,186 @@ def save_to_csv_vertical(data: Dict[str, str], csv_path: Path):
         for k in sorted(k for k in data.keys() if k not in emitted):
             w.writerow([k, data[k]])
 
+# ---------------- resume helpers ----------------
+
+_ID_FILE_RE = re.compile(r"^eurorad_(\d+)\.csv$", re.I)
+
+def is_output_complete(path: Path) -> bool:
+    """Minimal integrity check: has header and at least one data row (e.g., Title)."""
+    try:
+        if path.stat().st_size < 64:
+            return False
+        with open(path, "r", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+        if not rows or rows[0][:2] != ["Section", "Content"]:
+            return False
+        # Has at least one expected key row
+        keys = {r[0] for r in rows[1:] if r}
+        return any(k in keys for k in ("Title", "CLINICAL HISTORY", "IMAGING FINDINGS", "FINAL DIAGNOSIS"))
+    except Exception:
+        return False
+
+def scan_completed_ids(outdir: Path) -> Set[int]:
+    done: Set[int] = set()
+    if not outdir.exists():
+        return done
+    for p in outdir.glob("eurorad_*.csv"):
+        m = _ID_FILE_RE.match(p.name)
+        if not m:
+            continue
+        cid = int(m.group(1))
+        if is_output_complete(p):
+            done.add(cid)
+    return done
+
+# ---------------- ID selection (CSV/range) ----------------
+
+def _normalize_header(name: str) -> str:
+    return re.sub(r"\s+", " ", (name or "")).strip().lower()
+
+def read_ids_from_csv(csv_path: Path, case_id_col: str) -> List[int]:
+    requested = _normalize_header(case_id_col)
+    ids: List[int] = []
+    with open(csv_path, "r", newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        norm_to_real = {_normalize_header(h): h for h in (reader.fieldnames or [])}
+        key = None
+        if requested in norm_to_real:
+            key = norm_to_real[requested]
+        else:
+            def _canon(s: str) -> str:
+                return re.sub(r"[^a-z0-9]+", "", _normalize_header(s))
+            req_canon = _canon(case_id_col)
+            for nh, real in norm_to_real.items():
+                if _canon(nh) == req_canon:
+                    key = real
+                    break
+        if not key:
+            raise ValueError(f"Column '{case_id_col}' not found in CSV headers: {reader.fieldnames}")
+
+        for row in reader:
+            raw = (row.get(key) or "").strip()
+            if not raw:
+                continue
+            m = re.search(r"\d+", raw)
+            if not m:
+                continue
+            try:
+                cid = int(m.group(0))
+                ids.append(cid)
+            except Exception:
+                continue
+    return ids
+
+def build_id_list(
+    start_id: int,
+    end_id: int,
+    csv_path: Optional[str],
+    case_id_col: str,
+    include_range: bool,
+) -> List[int]:
+    ids: Set[int] = set()
+    if csv_path:
+        csv_ids = read_ids_from_csv(Path(csv_path), case_id_col)
+        if not include_range:
+            return sorted(set(csv_ids))
+        ids.update(csv_ids)
+    if end_id < start_id:
+        raise ValueError("--end must be >= --start")
+    ids.update(range(start_id, end_id + 1))
+    return sorted(ids)
+
 # ---------------- main ----------------
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--start", type=int, default=18806)
-    ap.add_argument("--end", type=int, default=19164)
-    ap.add_argument("--outdir", type=str, default=".")
-    ap.add_argument("--sleep", type=float, default=1.0, help="seconds between requests")
+    ap.add_argument("--start", type=int, default=18806, help="Start case ID (inclusive)")
+    ap.add_argument("--end", type=int, default=19164, help="End case ID (inclusive)")
+    ap.add_argument("--outdir", type=str, default=".", help="Output directory")
+    ap.add_argument("--sleep", type=float, default=1.0, help="Seconds between requests")
+    ap.add_argument("--csv", type=str, default=None, help="Path to CSV containing case IDs")
+    ap.add_argument("--case-id-col", type=str, default="Case ID", help="Column name with case IDs")
+    ap.add_argument("--include-range", action="store_true",
+                    help="If set with --csv, scrape the union of CSV IDs and [--start, --end]. "
+                         "By default, providing --csv scrapes ONLY those IDs.")
+    ap.add_argument("--debug", action="store_true", help="Verbose per-case logging instead of tqdm")
+    ap.add_argument("--resume", action="store_true",
+                    help="Skip IDs that already have a completed output CSV in --outdir")
+    ap.add_argument("--timeout", type=int, default=30, help="HTTP timeout (seconds)")
+    ap.add_argument("--retries", type=int, default=3, help="HTTP retries per URL")
+    ap.add_argument("--backoff", type=float, default=1.0, help="Retry backoff multiplier (seconds)")
     args = ap.parse_args()
 
     outdir = Path(args.outdir)
-    start_id, end_id = int(args.start), int(args.end)
-    if end_id < start_id:
-        print("Error: --end must be >= --start")
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        all_ids = build_id_list(args.start, args.end, args.csv, args.case_id_col, args.include_range)
+    except Exception as e:
+        print(f"Error building ID list: {e}")
         sys.exit(2)
 
-    total_ok, total_fail = 0, 0
-    for cid in range(start_id, end_id + 1):
-        url = f"https://www.eurorad.org/case/{cid}"
-        try:
-            data = scrape_case(url)
-            if not data:
-                print(f"[{cid}] not available or blocked")
-                total_fail += 1
-            else:
-                out = outdir / f"eurorad_{cid}.csv"
-                save_to_csv_vertical(data, out)
-                captured = [k for k in ("CLINICAL HISTORY","IMAGING FINDINGS","DISCUSSION","FINAL DIAGNOSIS") if k in data]
-                sec = data.get("Section", "unknown")
-                print(f"[{cid}] saved -> {out}  section: {sec}  sections: {', '.join(captured) or 'none'}")
-                total_ok += 1
-        except Exception as e:
-            print(f"[{cid}] ERROR: {e.__class__.__name__}: {e}")
-            total_fail += 1
-        time.sleep(args.sleep)
+    # Resume filter
+    skipped_existing = 0
+    if args.resume:
+        done_ids = scan_completed_ids(outdir)
+        before = len(all_ids)
+        ids = [cid for cid in all_ids if cid not in done_ids]
+        skipped_existing = before - len(ids)
+    else:
+        ids = list(all_ids)
 
-    print(f"Done. OK={total_ok} Fail={total_fail} Range={start_id}-{end_id}")
+    if not ids:
+        print("All requested IDs already processed (nothing to do).")
+        return
+
+    sess = make_scraper(args.timeout)
+
+    total_ok, total_fail = 0, 0
+    iterator = ids
+    progress = None
+    if not args.debug:
+        progress = tqdm(total=len(ids), desc="Scraping Eurorad", unit="case")
+
+    try:
+        for cid in iterator:
+            url = f"https://www.eurorad.org/case/{cid}"
+            try:
+                data = scrape_case(sess, url, args.timeout, args.retries, args.backoff)
+                if not data:
+                    if args.debug:
+                        print(f"[{cid}] not available or blocked")
+                    total_fail += 1
+                else:
+                    out = outdir / f"eurorad_{cid}.csv"
+                    save_to_csv_vertical(data, out)
+                    if args.debug:
+                        captured = [k for k in ("CLINICAL HISTORY","IMAGING FINDINGS","DISCUSSION","FINAL DIAGNOSIS") if k in data]
+                        sec = data.get("Section", "unknown")
+                        print(f"[{cid}] saved -> {out}  section: {sec}  sections: {', '.join(captured) or 'none'}")
+                    total_ok += 1
+            except KeyboardInterrupt:
+                raise
+            except Exception as e:
+                if args.debug:
+                    print(f"[{cid}] ERROR: {e.__class__.__name__}: {e}")
+                total_fail += 1
+            finally:
+                if progress is not None:
+                    progress.update(1)
+            time.sleep(args.sleep)
+    except KeyboardInterrupt:
+        if progress is not None:
+            progress.close()
+        print("\nInterrupted by user.")
+    finally:
+        if progress is not None:
+            progress.close()
+
+    mode = "CSV-only" if args.csv and not args.include_range else ("CSV+Range" if args.csv else "Range")
+    print(f"Done. Mode={mode} OK={total_ok} Fail={total_fail} "
+          f"Requested={len(all_ids)} Skipped(existing)={skipped_existing} Processed_now={len(ids)}")
 
 if __name__ == "__main__":
     main()
