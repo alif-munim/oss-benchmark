@@ -118,7 +118,7 @@ def call_openrouter(
     timeout: int = 60,
     include_reasoning: bool = False,
     max_output_tokens: Optional[int] = None,
-    temperature: float = 0.0,
+    temperature: Optional[float] = None,  # None => use model default (do not send)
     verbose: bool = False,
 ) -> Tuple[str, Optional[str]]:
     api_key = os.environ.get("OPENROUTER_API_KEY")
@@ -138,8 +138,10 @@ def call_openrouter(
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        "temperature": float(temperature),
     }
+    # Use model defaults unless explicitly provided
+    if temperature is not None:
+        payload["temperature"] = float(temperature)
     if max_output_tokens is not None:
         payload["max_tokens"] = int(max_output_tokens)
     if include_reasoning:
@@ -164,7 +166,7 @@ def call_openrouter(
 
             try:
                 data = r.json()
-            except requests.exceptions.JSONDecodeError as je:
+            except ValueError as je:
                 last_err = RuntimeError(
                     f"JSON decode failed (attempt {attempt}/{max_retries}): {je}; body[:200]={r.text[:200]!r}"
                 )
@@ -202,7 +204,7 @@ def process_one(
     reasoning_effort: Optional[str],
     include_reasoning: bool,
     max_output_tokens: Optional[int],
-    temperature: float,
+    temperature: Optional[float],
     verbose: bool,
 ) -> Tuple[int, str, Optional[str], Optional[str]]:
     # Fill {effort} if present in system prompt
@@ -218,7 +220,7 @@ def process_one(
         endpoint,
         include_reasoning=include_reasoning,
         max_output_tokens=max_output_tokens,
-        temperature=temperature,
+        temperature=temperature,  # None => model default
         verbose=verbose,
     )
     score = parse_score(raw)
@@ -236,7 +238,7 @@ def task_wrapper(
     reasoning_effort: Optional[str],
     include_reasoning: bool,
     max_output_tokens: Optional[int],
-    temperature: float,
+    temperature: Optional[float],
     verbose: bool,
 ) -> Tuple[int, str, Optional[str], Optional[str]]:
     try:
@@ -261,9 +263,10 @@ def main():
     p.add_argument("--system", default=DEFAULT_SYSTEM, help="Override system prompt (may contain {effort})")
     p.add_argument("--text_column", default=DEFAULT_TEXT_COL, help="Column with task text (default: Disease_description)")
     p.add_argument("--reasoning_effort", choices=["low", "medium", "high"], default=None)
-    p.add_argument("--include_reasoning", action="store_true")
-    p.add_argument("--max_output_tokens", type=int, default=None)
-    p.add_argument("--temperature", type=float, default=0.0)
+    p.add_argument("--include_reasoning", action="store_true", help="Include model reasoning field if supported (non-default).")
+    p.add_argument("--max_output_tokens", type=int, default=None, help="Max tokens; omit to use model default.")
+    p.add_argument("--temperature", type=float, default=None, help="Sampling temperature; omit to use model default.")
+    p.add_argument("--timeout", type=int, default=60, help="Request timeout in seconds.")
     p.add_argument("--verbose", action="store_true")
     args = p.parse_args()
 
@@ -317,6 +320,7 @@ def main():
     print(f"Running {len(todo)} requests against {args.endpoint} with {args.workers} workers…")
     output_csv.parent.mkdir(parents=True, exist_ok=True)
 
+    # Thread pool
     with ThreadPoolExecutor(max_workers=max(1, args.workers)) as ex:
         futures = []
         for i in todo:
@@ -332,7 +336,7 @@ def main():
                     args.reasoning_effort,
                     args.include_reasoning,
                     args.max_output_tokens,
-                    args.temperature,
+                    args.temperature,  # None => model default
                     args.verbose,
                 )
             )

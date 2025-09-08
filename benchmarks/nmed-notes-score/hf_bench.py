@@ -8,6 +8,8 @@
 # This version runs the "diagnostic Likert scoring" task using the SAME prompt
 # as in your reference script. It expects a column (default: Disease_description).
 #
+# Uses provider default generation settings unless you explicitly override via CLI.
+#
 # Requires: pip install openai pandas tqdm
 
 import os, re, argparse, time
@@ -92,37 +94,46 @@ def needs_rerun(raw: str, score: str) -> bool:
 
 # ---------- Clients ----------
 class HFClientBase:
-    def __init__(self, base_url: str, api_key: str, model: str, temperature: float = 0.0):
+    def __init__(self, base_url: str, api_key: str, model: str):
         from openai import OpenAI
         self.client = OpenAI(base_url=base_url, api_key=api_key)
         self.model = model
-        self.temperature = temperature
 
 class HFChatClient(HFClientBase):
     def infer(self, system_text: str, user_text: str,
-              reasoning_effort: Optional[str], max_output_tokens: Optional[int]) -> str:
+              reasoning_effort: Optional[str], max_output_tokens: Optional[int],
+              temperature: Optional[float]) -> str:
         messages = []
         if system_text and system_text.strip():
             messages.append({"role": "system", "content": system_text})
-        # Put the entire evaluation instruction + inputs in USER (same as reference)
         messages.append({"role": "user", "content": user_text})
-        cc = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            temperature=self.temperature,
-            max_tokens=(int(max_output_tokens) if max_output_tokens is not None else 128),
-        )
+
+        kwargs: Dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+        }
+        # Only override provider defaults if user supplied flags
+        if temperature is not None:
+            kwargs["temperature"] = float(temperature)
+        if max_output_tokens is not None:
+            kwargs["max_tokens"] = int(max_output_tokens)
+
+        cc = self.client.chat.completions.create(**kwargs)
         return (cc.choices[0].message.content or "").strip()
 
 class HFResponsesClient(HFClientBase):
     def infer(self, system_text: str, user_text: str,
-              reasoning_effort: Optional[str], max_output_tokens: Optional[int]) -> str:
+              reasoning_effort: Optional[str], max_output_tokens: Optional[int],
+              temperature: Optional[float]) -> str:
         msgs: List[Dict[str, Any]] = []
         if system_text and system_text.strip():
             msgs.append({"role": "system", "content": system_text})
         msgs.append({"role": "user", "content": user_text})
 
-        kwargs: Dict[str, Any] = {"model": self.model, "input": msgs, "temperature": self.temperature}
+        kwargs: Dict[str, Any] = {"model": self.model, "input": msgs}
+        # Only override defaults if provided
+        if temperature is not None:
+            kwargs["temperature"] = float(temperature)
         if reasoning_effort:
             kwargs["reasoning"] = {"effort": reasoning_effort}
         if max_output_tokens is not None:
@@ -152,12 +163,13 @@ def main():
     ap.add_argument("--hf_token", default=os.getenv("HF_TOKEN"))
     ap.add_argument("--system", default=DEFAULT_SYSTEM)
     ap.add_argument("--text_column", default=DEFAULT_TEXT_COL, help="Column containing the task text (default: Disease_description)")
+    # Use provider defaults unless user overrides these:
     ap.add_argument("--reasoning_effort", choices=["low","medium","high"], default=None)
-    ap.add_argument("--max_output_tokens", type=int, default=128)
+    ap.add_argument("--max_output_tokens", type=int, default=None)
+    ap.add_argument("--temperature", type=float, default=None)
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--results", default="results")
     ap.add_argument("--resume", action="store_true")
-    ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--output_csv", default=None, help="Write to this path (use when resuming from an output CSV).")
     ap.add_argument("--max_retries", type=int, default=4)
     ap.add_argument("--base_backoff", type=float, default=2.0)
@@ -206,10 +218,10 @@ def main():
 
     # Client
     if args.api == "chat":
-        client = HFChatClient(args.router_url, args.hf_token, args.model, temperature=args.temperature)
+        client = HFChatClient(args.router_url, args.hf_token, args.model)
         sys_text = args.system
     else:
-        client = HFResponsesClient(args.router_url, args.hf_token, args.model, temperature=args.temperature)
+        client = HFResponsesClient(args.router_url, args.hf_token, args.model)
         sys_text = args.system
 
     MAX_RETRIES = max(0, int(args.max_retries))
@@ -220,7 +232,13 @@ def main():
         attempt = 0
         while True:
             try:
-                raw = (client.infer(sys_text, user_prompt, args.reasoning_effort, args.max_output_tokens) or "").strip()
+                raw = (client.infer(
+                    sys_text,
+                    user_prompt,
+                    args.reasoning_effort,
+                    args.max_output_tokens,
+                    args.temperature,
+                ) or "").strip()
                 if not raw:
                     raise RuntimeError("empty_response")
                 score = parse_score(raw)
