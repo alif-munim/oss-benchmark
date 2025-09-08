@@ -10,21 +10,21 @@
 #   python benchmarks/hf_bench.py data/datasets/ophthalmology.csv \
 #     --model openai/gpt-oss-20b:fireworks-ai \
 #     --api chat \
-#     --reasoning_effort high \
-#     --max_output_tokens 2048 \
 #     --workers 4 \
 #     --results results
 #
 # Resume on the SAME output file (re-run only missing/errored rows):
-#   python benchmarks/hf_bench.py results/ophthalmology_openai-gpt-oss-20b-fireworks-ai_chat_re-high_max2048.csv \
+#   python benchmarks/hf_bench.py results/ophthalmology_openai-gpt-oss-20b-fireworks-ai_chat_re-high.csv \
 #     --model openai/gpt-oss-20b:fireworks-ai \
 #     --api chat \
-#     --reasoning_effort high \
-#     --max_output_tokens 2048 \
 #     --workers 2 \
 #     --results results \
 #     --resume \
-#     --output_csv results/ophthalmology_openai-gpt-oss-20b-fireworks-ai_chat_re-high_max2048.csv
+#     --output_csv results/ophthalmology_openai-gpt-oss-20b-fireworks-ai_chat_re-high.csv
+#
+# Notes:
+# - By default, this script DOES NOT set temperature or generation limits;
+#   provider defaults will be used unless you explicitly pass flags.
 #
 # Requires: pip install openai pandas tqdm
 
@@ -105,25 +105,29 @@ def needs_rerun(raw: str, choice: str) -> bool:
 
 # ---------- Clients ----------
 class HFClientBase:
-    def __init__(self, base_url: str, api_key: str, model: str, temperature: float = 0.0):
+    def __init__(self, base_url: str, api_key: str, model: str, temperature: Optional[float] = None):
         from openai import OpenAI
         self.client = OpenAI(base_url=base_url, api_key=api_key)
         self.model = model
-        self.temperature = temperature
+        self.temperature = temperature  # None => use provider default
 
 class HFChatClient(HFClientBase):
     def infer(self, system_text: str, user_text: str,
               reasoning_effort: Optional[str], max_output_tokens: Optional[int]) -> str:
         sys = system_text if not reasoning_effort else f"{system_text}\nReturn only the letters A–Z.\nReasoning: {reasoning_effort}."
-        cc = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
+        kwargs: Dict[str, Any] = {
+            "model": self.model,
+            "messages": [
                 {"role": "system", "content": sys},
                 {"role": "user", "content": user_text},
             ],
-            temperature=self.temperature,
-            max_tokens=(int(max_output_tokens) if max_output_tokens is not None else 512),
-        )
+        }
+        if self.temperature is not None:
+            kwargs["temperature"] = self.temperature
+        if max_output_tokens is not None:
+            kwargs["max_tokens"] = int(max_output_tokens)
+
+        cc = self.client.chat.completions.create(**kwargs)
         return extract_final((cc.choices[0].message.content or "").strip())
 
 class HFResponsesClient(HFClientBase):
@@ -135,12 +139,14 @@ class HFResponsesClient(HFClientBase):
                 {"role": "system", "content": system_text},
                 {"role": "user", "content": user_text},
             ],
-            "temperature": self.temperature,
         }
         if reasoning_effort:
             kwargs["reasoning"] = {"effort": reasoning_effort}
+        if self.temperature is not None:
+            kwargs["temperature"] = self.temperature
         if max_output_tokens is not None:
             kwargs["max_output_tokens"] = int(max_output_tokens)
+
         r = self.client.responses.create(**kwargs)
 
         text = getattr(r, "output_text", None) or ""
@@ -165,11 +171,11 @@ def main():
     ap.add_argument("--system", default=DEFAULT_SYSTEM)
     ap.add_argument("--user_template", default=DEFAULT_USER_TEMPLATE)
     ap.add_argument("--reasoning_effort", choices=["low","medium","high"], default=None)
-    ap.add_argument("--max_output_tokens", type=int, default=2048)
+    ap.add_argument("--max_output_tokens", type=int, default=None, help="If omitted, provider default is used.")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--results", default="results")
     ap.add_argument("--resume", action="store_true")
-    ap.add_argument("--temperature", type=float, default=0.0)
+    ap.add_argument("--temperature", type=float, default=None, help="If omitted, provider default is used.")
     ap.add_argument("--output_csv", default=None, help="Write to this path (use when resuming from an output CSV).")
     ap.add_argument("--max_retries", type=int, default=4)
     ap.add_argument("--base_backoff", type=float, default=2.0)
