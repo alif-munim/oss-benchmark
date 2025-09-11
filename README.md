@@ -8,6 +8,146 @@ pip install cloudscraper beautifulsoup4
 
 ### Benchmarking NMED
 
+```
+python benchmarks/nmed-notes-score/hf_bench.py \
+  /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_diagnosis.csv \
+  --model openai/gpt-oss-120b:fireworks-ai \
+  --api chat \
+  --reasoning_effort high \
+  --max_output_tokens 8192 \
+  --workers 1 \
+  --results /home/bowang/Documents/alif/oss-benchmark/results \
+  --resume \
+  --output_csv nmed-diagnosis-oss-120b-high-v1.csv
+
+python benchmarks/nmed-notes-score/hf_bench.py \
+  /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_diagnosis.csv \
+  --model openai/gpt-oss-120b:fireworks-ai \
+  --api chat \
+  --reasoning_effort medium \
+  --max_output_tokens 8192 \
+  --workers 1 \
+  --results /home/bowang/Documents/alif/oss-benchmark/results \
+  --resume \
+  --output_csv nmed-diagnosis-oss-120b-med-v1.csv
+
+python benchmarks/nmed-notes-score/hf_bench.py \
+  /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_diagnosis.csv \
+  --model openai/gpt-oss-120b:fireworks-ai \
+  --api chat \
+  --reasoning_effort low \
+  --max_output_tokens 8192 \
+  --workers 1 \
+  --results /home/bowang/Documents/alif/oss-benchmark/results \
+  --resume \
+  --output_csv nmed-diagnosis-oss-120b-low-v1.csv
+
+python benchmarks/nmed-notes-score/hf_bench.py \
+  /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_diagnosis.csv \
+  --model openai/gpt-oss-20b:fireworks-ai \
+  --api chat \
+  --reasoning_effort high \
+  --max_output_tokens 8192 \
+  --workers 1 \
+  --results /home/bowang/Documents/alif/oss-benchmark/results \
+  --resume \
+  --output_csv nmed-diagnosis-oss-20b-high-v1.csv
+
+python benchmarks/nmed-notes-score/hf_bench.py \
+  /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_diagnosis.csv \
+  --model openai/gpt-oss-20b:fireworks-ai \
+  --api chat \
+  --reasoning_effort medium \
+  --max_output_tokens 8192 \
+  --workers 1 \
+  --results /home/bowang/Documents/alif/oss-benchmark/results \
+  --resume \
+  --output_csv nmed-diagnosis-oss-20b-med-v1.csv
+
+python benchmarks/nmed-notes-score/hf_bench.py \
+  /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_diagnosis.csv \
+  --model openai/gpt-oss-20b:fireworks-ai \
+  --api chat \
+  --reasoning_effort low \
+  --max_output_tokens 8192 \
+  --workers 1 \
+  --results /home/bowang/Documents/alif/oss-benchmark/results \
+  --resume \
+  --output_csv nmed-diagnosis-oss-20b-low-v1.csv
+
+python benchmarks/nmed-notes-score/hf_bench.py \
+  /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_treatment.csv \
+  --model openai/gpt-oss-120b:fireworks-ai \
+  --eval_mode treatment \
+  --api chat \
+  --reasoning_effort high \
+  --max_output_tokens 8192 \
+  --workers 1 \
+  --results /home/bowang/Documents/alif/oss-benchmark/results \
+  --resume \
+  --output_csv nmed-treatment-oss-120b-high-v1.csv
+
+python benchmarks/nmed-notes-score/hf_bench.py \
+  /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_treatment.csv \
+  --model openai/gpt-oss-120b:fireworks-ai \
+  --eval_mode treatment \
+  --api chat \
+  --reasoning_effort medium \
+  --max_output_tokens 8192 \
+  --workers 1 \
+  --results /home/bowang/Documents/alif/oss-benchmark/results \
+  --resume \
+  --output_csv nmed-treatment-oss-120b-med-v1.csv
+
+python benchmarks/nmed-notes-score/hf_bench.py \
+  /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_treatment.csv \
+  --model openai/gpt-oss-120b:fireworks-ai \
+  --eval_mode treatment \
+  --api chat \
+  --reasoning_effort low \
+  --max_output_tokens 8192 \
+  --workers 1 \
+  --results /home/bowang/Documents/alif/oss-benchmark/results \
+  --resume \
+  --output_csv nmed-treatment-oss-120b-low-v1.csv
+
+python benchmarks/nmed-notes-score/hf_bench.py \
+  /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_treatment.csv \
+  --model openai/gpt-oss-20b:fireworks-ai \
+  --eval_mode treatment \
+  --api chat \
+  --reasoning_effort high \
+  --max_output_tokens 8192 \
+  --workers 1 \
+  --results /home/bowang/Documents/alif/oss-benchmark/results \
+  --resume \
+  --output_csv nmed-treatment-oss-20b-high-v1.csv
+
+python benchmarks/nmed-notes-score/hf_bench.py \
+  /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_treatment.csv \
+  --model openai/gpt-oss-20b:fireworks-ai \
+  --eval_mode treatment \
+  --api chat \
+  --reasoning_effort medium \
+  --max_output_tokens 8192 \
+  --workers 1 \
+  --results /home/bowang/Documents/alif/oss-benchmark/results \
+  --resume \
+  --output_csv nmed-treatment-oss-20b-med-v1.csv
+
+python benchmarks/nmed-notes-score/hf_bench.py \
+  /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_treatment.csv \
+  --model openai/gpt-oss-20b:fireworks-ai \
+  --eval_mode treatment \
+  --api chat \
+  --reasoning_effort low \
+  --max_output_tokens 8192 \
+  --workers 1 \
+  --results /home/bowang/Documents/alif/oss-benchmark/results \
+  --resume \
+  --output_csv nmed-treatment-oss-20b-low-v1.csv
+```
+
 OpenAI
 ```
 python benchmarks/nmed-notes-score/gpt.py --mode batch --debug \
@@ -20,10 +160,37 @@ python benchmarks/nmed-notes-score/gpt.py --mode responses --effort low --debug 
   --dataset /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_diagnosis.csv
 
 python3 benchmarks/nmed-notes-score/gpt.py \
-  --mode chat \
-  --chat-model gpt-5-2025-08-07 \
+  --model gpt-5-2025-08-07 \
+  --dataset /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_treatment.csv \
+  --results-dir /home/bowang/Documents/alif/oss-benchmark/results \
+  --resume \
+  --output-csv nmed-treatment-gpt-5-2025-08-07-v2.csv \
+  --eval-mode treatment
+
+python3 benchmarks/nmed-notes-score/gpt.py \
+  --model gpt-5-2025-08-07 \
   --dataset /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_diagnosis.csv \
-  --results-dir /home/bowang/Documents/alif/oss-benchmark/results
+  --results-dir /home/bowang/Documents/alif/oss-benchmark/results \
+  --resume \
+  --output-csv nmed-diagnosis-gpt-5-2025-08-07-v2.csv \
+  --eval-mode diagnosis
+
+
+python3 benchmarks/nmed-notes-score/gpt.py \
+  --model o4-mini-2025-04-16 \
+  --dataset /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_treatment.csv \
+  --results-dir /home/bowang/Documents/alif/oss-benchmark/results \
+  --resume \
+  --output-csv nmed-treatment-o4-mini-2025-04-16-v1.csv \
+  --eval-mode treatment
+
+python3 benchmarks/nmed-notes-score/gpt.py \
+  --model o4-mini-2025-04-16 \
+  --dataset /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_diagnosis.csv \
+  --results-dir /home/bowang/Documents/alif/oss-benchmark/results \
+  --resume \
+  --output-csv nmed-diagnosis-o4-mini-2025-04-16-v1.csv \
+  --eval-mode diagnosis
 
 
 GPT-OSS HuggingFace
@@ -42,12 +209,13 @@ python benchmarks/nmed-notes-score/hf_bench.py \
 Openrouter
 ```
 python benchmarks/nmed-notes-score/openrouter.py \
-  /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_diagnosis.csv \
-  --endpoint qwen/qwen3-235b-a22b-2507 \
+  /home/bowang/Documents/alif/oss-benchmark/data/datasets/nmed_treatment.csv \
+  --endpoint deepseek/deepseek-r1-0528 \
   --results_dir /home/bowang/Documents/alif/oss-benchmark/results \
   --max_output_tokens 8192 \
   --workers 1 \
-  --resume
+  --resume \
+  --output_csv nmed_deepseek/treatment-deepseek-r1-0528_v1.csv
 ```
 
 ### Benchmarking Eurorad
@@ -60,11 +228,18 @@ python benchmarks/eurorad/gpt.py --mode chat --chat-model gpt-5 --debug
 python benchmarks/eurorad/gpt.py --mode responses --effort low --debug
 
 python3 benchmarks/eurorad/gpt.py \
-  --mode chat \
-  --chat-model gpt-5-2025-08-07 \
+  --model gpt-5-2025-08-07 \
   --dataset /home/bowang/Documents/alif/oss-benchmark/data/datasets/eurorad_test.csv \
   --results-dir /home/bowang/Documents/alif/oss-benchmark/results \
-  --output-csv eurorad_gpt-5-2025-08-07_v1.csv
+  --resume \
+  --output-csv eurorad_gpt-5-2025-08-07_v4.csv
+
+python3 benchmarks/eurorad/gpt.py \
+  --model o4-mini-2025-04-16 \
+  --dataset /home/bowang/Documents/alif/oss-benchmark/data/datasets/eurorad_test.csv \
+  --results-dir /home/bowang/Documents/alif/oss-benchmark/results \
+  --resume \
+  --output-csv eurorad_o4-mini-2025-04-16_v4.csv
 ```
 
 GPT-OSS example (official HuggingFace API)
@@ -73,24 +248,24 @@ python benchmarks/eurorad/hf_bench.py \
   /home/bowang/Documents/alif/oss-benchmark/data/datasets/eurorad_test.csv \
   --model openai/gpt-oss-20b:fireworks-ai \
   --api chat \
-  --reasoning_effort high \
+  --reasoning_effort low \
   --max_output_tokens 8192 \
   --workers 1 \
   --results /home/bowang/Documents/alif/oss-benchmark/results \
   --resume \
-  --output_csv eurorad_test_openai-gpt-oss-20b-fireworks-ai_chat_re-high_max8192_v1.csv
+  --output_csv oss20b_low_v3.csv
 ```
 
 Openrouter Example
 ```
 python benchmarks/eurorad/openrouter.py \
   /home/bowang/Documents/alif/oss-benchmark/data/datasets/eurorad_test.csv \
-  --endpoint qwen/qwen3-235b-a22b-2507 \
+  --endpoint deepseek/deepseek-r1-0528 \
   --results_dir /home/bowang/Documents/alif/oss-benchmark/results \
   --max_output_tokens 8192 \
   --workers 1 \
   --resume \
-  --output_csv eurorad_qwen3-235b-a22b-2507_v2.csv
+  --output_csv eurorad_deepseek/deepseek-r1-0528_v3.csv
 ```
 
 ### Benchmarking Ophthalmology
@@ -111,7 +286,50 @@ python benchmarks/ophthalmology/gpt.py --mode batch --debug
 
 python3 benchmarks/ophthalmology/gpt.py \
   --mode chat \
-  --chat-model gpt-5-2025-08-07
+  --chat-model gpt-5-2025-08-07 \
+  --out-csv results/ophthalmology-gpt-5-2025-08-07-v2.csv
+
+python3 benchmarks/ophthalmology/gpt.py \
+  --model gpt-5-2025-08-07 \
+  --dataset /home/bowang/Documents/alif/oss-benchmark/data/datasets/ophthalmology.csv \
+  --results-dir /home/bowang/Documents/alif/oss-benchmark/results \
+  --resume \
+  --output-csv ophthalmology_responses_gpt-5-2025-08-07_v1.csv
+
+python3 benchmarks/ophthalmology/gpt.py \
+  --model gpt-5-2025-08-07 \
+  --dataset /home/bowang/Documents/alif/oss-benchmark/data/datasets/ophthalmology.csv \
+  --results-dir /home/bowang/Documents/alif/oss-benchmark/results \
+  --resume \
+  --output-csv ophthalmology_responses_gpt-5-2025-08-07_v2.csv
+
+python3 benchmarks/ophthalmology/gpt.py \
+  --model gpt-5-2025-08-07 \
+  --dataset /home/bowang/Documents/alif/oss-benchmark/data/datasets/ophthalmology.csv \
+  --results-dir /home/bowang/Documents/alif/oss-benchmark/results \
+  --resume \
+  --output-csv ophthalmology_responses_gpt-5-2025-08-07_v3.csv
+
+python3 benchmarks/ophthalmology/gpt.py \
+  --model o4-mini-2025-04-16 \
+  --dataset /home/bowang/Documents/alif/oss-benchmark/data/datasets/ophthalmology.csv \
+  --results-dir /home/bowang/Documents/alif/oss-benchmark/results \
+  --resume \
+  --output-csv ophthalmology_responses_o4-mini-2025-04-16_v1.csv
+
+python3 benchmarks/ophthalmology/gpt.py \
+  --model o4-mini-2025-04-16 \
+  --dataset /home/bowang/Documents/alif/oss-benchmark/data/datasets/ophthalmology.csv \
+  --results-dir /home/bowang/Documents/alif/oss-benchmark/results \
+  --resume \
+  --output-csv ophthalmology_responses_o4-mini-2025-04-16_v2.csv
+
+python3 benchmarks/ophthalmology/gpt.py \
+  --model o4-mini-2025-04-16 \
+  --dataset /home/bowang/Documents/alif/oss-benchmark/data/datasets/ophthalmology.csv \
+  --results-dir /home/bowang/Documents/alif/oss-benchmark/results \
+  --resume \
+  --output-csv ophthalmology_responses_o4-mini-2025-04-16_v3.csv
 ```
 
 gpt-oss-20b
@@ -176,15 +394,125 @@ python benchmarks/ophthalmology/hf_bench_dataset.py results/ophthalmology_openai
 ```
 
 ```
-python benchmarks/ophthalmology/hf_bench.py results/ophthalmology_openai-gpt-oss-120b-fireworks-ai_chat_re-low_max4096.csv \
+python benchmarks/ophthalmology/hf_bench.py data/datasets/ophthalmology.csv \
   --model openai/gpt-oss-120b:fireworks-ai \
   --api chat \
   --reasoning_effort low \
-  --max_output_tokens 4096 \
-  --workers 2 \
+  --max_output_tokens 8192 \
+  --workers 1 \
   --results results \
   --resume \
-  --output_csv results/ophthalmology_openai-gpt-oss-120b-fireworks-ai_chat_re-low_max4096.csv
+  --output_csv results/ophthalmology_oss120b_low_v4.csv
+
+python benchmarks/ophthalmology/hf_bench.py data/datasets/ophthalmology.csv \
+  --model openai/gpt-oss-120b:fireworks-ai \
+  --api chat \
+  --reasoning_effort low \
+  --max_output_tokens 8192 \
+  --workers 1 \
+  --results results \
+  --resume \
+  --output_csv results/ophthalmology_oss120b_low_v2.csv
+
+ python benchmarks/ophthalmology/hf_bench.py data/datasets/ophthalmology.csv \
+  --model openai/gpt-oss-120b:fireworks-ai \
+  --api chat \
+  --reasoning_effort low \
+  --max_output_tokens 8192 \
+  --workers 1 \
+  --results results \
+  --resume \
+  --output_csv results/ophthalmology_oss120b_low_v3.csv
+
+python benchmarks/ophthalmology/hf_bench.py data/datasets/ophthalmology.csv \
+  --model openai/gpt-oss-20b:fireworks-ai \
+  --api chat \
+  --reasoning_effort high \
+  --max_output_tokens 8192 \
+  --workers 1 \
+  --results results \
+  --resume \
+  --output_csv results/ophthalmology_oss20b_high_v1.csv
+
+python benchmarks/ophthalmology/hf_bench.py data/datasets/ophthalmology.csv \
+  --model openai/gpt-oss-20b:fireworks-ai \
+  --api chat \
+  --reasoning_effort high \
+  --max_output_tokens 8192 \
+  --workers 1 \
+  --results results \
+  --resume \
+  --output_csv results/ophthalmology_oss20b_high_v2.csv
+
+python benchmarks/ophthalmology/hf_bench.py data/datasets/ophthalmology.csv \
+  --model openai/gpt-oss-20b:fireworks-ai \
+  --api chat \
+  --reasoning_effort high \
+  --max_output_tokens 8192 \
+  --workers 1 \
+  --results results \
+  --resume \
+  --output_csv results/ophthalmology_oss20b_high_v3.csv
+
+python benchmarks/ophthalmology/hf_bench.py data/datasets/ophthalmology.csv \
+  --model openai/gpt-oss-20b:fireworks-ai \
+  --api chat \
+  --reasoning_effort medium \
+  --max_output_tokens 8192 \
+  --workers 1 \
+  --results results \
+  --resume \
+  --output_csv results/ophthalmology_oss20b_med_v1.csv
+
+python benchmarks/ophthalmology/hf_bench.py data/datasets/ophthalmology.csv \
+  --model openai/gpt-oss-20b:fireworks-ai \
+  --api chat \
+  --reasoning_effort medium \
+  --max_output_tokens 8192 \
+  --workers 1 \
+  --results results \
+  --resume \
+  --output_csv results/ophthalmology_oss20b_med_v2.csv
+
+python benchmarks/ophthalmology/hf_bench.py data/datasets/ophthalmology.csv \
+  --model openai/gpt-oss-20b:fireworks-ai \
+  --api chat \
+  --reasoning_effort medium \
+  --max_output_tokens 8192 \
+  --workers 1 \
+  --results results \
+  --resume \
+  --output_csv results/ophthalmology_oss20b_med_v3.csv
+
+python benchmarks/ophthalmology/hf_bench.py data/datasets/ophthalmology.csv \
+  --model openai/gpt-oss-20b:fireworks-ai \
+  --api chat \
+  --reasoning_effort low \
+  --max_output_tokens 8192 \
+  --workers 1 \
+  --results results \
+  --resume \
+  --output_csv results/ophthalmology_oss20b_low_v1.csv
+
+python benchmarks/ophthalmology/hf_bench.py data/datasets/ophthalmology.csv \
+  --model openai/gpt-oss-20b:fireworks-ai \
+  --api chat \
+  --reasoning_effort low \
+  --max_output_tokens 8192 \
+  --workers 1 \
+  --results results \
+  --resume \
+  --output_csv results/ophthalmology_oss20b_low_v2.csv
+
+python benchmarks/ophthalmology/hf_bench.py data/datasets/ophthalmology.csv \
+  --model openai/gpt-oss-20b:fireworks-ai \
+  --api chat \
+  --reasoning_effort low \
+  --max_output_tokens 8192 \
+  --workers 1 \
+  --results results \
+  --resume \
+  --output_csv results/ophthalmology_oss20b_low_v3.csv
 ```
 
 Novita
@@ -200,7 +528,8 @@ python benchmarks/ophthalmology/openrouter.py data/datasets/ophthalmology.csv \
   --endpoint qwen/qwen3-235b-a22b-2507 \
   --results_dir results \
   --workers 1 \
-  --resume
+  --resume \
+  --output_csv results/qwen/qwen3-235b-a22b-2507-v2.csv
 ```
 
 OpenAI
@@ -255,6 +584,7 @@ python data/combine_cases_csv.py --indir eurorad_csvs --out eurorad_cases_wide.c
 Get train cases
 ```
 python data/get_range_eurorad.py --csv data/eurorad_train_cases.csv --case-id-col "Case ID" --outdir eurorad_train_csvs --resume
+python data/combine_cases_csv.py --indir eurorad_train_csvs --out eurorad_train_cases_wide.csv
 ```
 
 ### Finetuning
