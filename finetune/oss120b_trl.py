@@ -1,30 +1,15 @@
 #!/usr/bin/env python
-# finetune/oss120b_trl_singleload_lenfilter.py
-# - Single-load 120B (MXFP4 -> bf16) with manual device_map via init_empty_weights.
-# - TRL SFT over JSONL {"messages":[...]} using tokenizer chat_template.
-# - Attention-only LoRA by default (safe); EXPERTS=False avoids MoE ParamWrapper.
-# - Filters out over-length examples so nothing is truncated.
-# - Trains for 2 epochs; saves every 100 steps; prints config & dataset stats.
+# finetune/oss120b_trl_lenfilter_wandb.py
+# - Single-load 120B (MXFP4 -> bf16), attention-only LoRA by default.
+# - Filters out over-length examples (no truncation).
+# - Logs every step; W&B enabled; saves every 100 steps (keep last 10).
+# - Fixes numpy.int64 indexing for datasets.
 
-import os
-# ---- env early ----
-os.environ["TMPDIR"] = "/tmp"
-os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-os.environ.setdefault(
-    "PYTORCH_CUDA_ALLOC_CONF",
-    "max_split_size_mb:128,garbage_collection_threshold:0.8,expandable_segments:True"
-)
-os.environ.setdefault("HF_HOME", "/mnt/custom-file-systems/efs/_hf_cache")
-os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
-
-import math
-import json
+import os, math, json
 import numpy as np
 import torch, multiprocessing as mp
 from datasets import load_dataset
-from transformers import (
-    AutoConfig, AutoTokenizer, AutoModelForCausalLM, Mxfp4Config
-)
+from transformers import AutoConfig, AutoTokenizer, AutoModelForCausalLM, Mxfp4Config
 from accelerate import init_empty_weights
 try:
     from accelerate.utils import get_balanced_device_map
@@ -37,42 +22,55 @@ except Exception:
 from peft import LoraConfig, get_peft_model
 from trl import SFTTrainer, SFTConfig
 
+# ---------------- env early ----------------
+os.environ.setdefault("TMPDIR", "/tmp")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:128,garbage_collection_threshold:0.8,expandable_segments:True")
+os.environ.setdefault("HF_HOME", "/mnt/custom-file-systems/efs/_hf_cache")
+os.environ.setdefault("HF_HUB_ENABLE_HF_TRANSFER", "1")
+
+# ---------------- user/config knobs ----------------
+DATA_PATH = "train_cot_long.jsonl"      # each line: {"messages":[...]}
+MODEL_NAME = "openai/gpt-oss-120b"
+SEED = 3407
+MAX_LEN = 2048
+EXPERTS = False                          # keep False unless you add MoE ParamWrapper targets
+# LoRA hyperparams (tunable)
+LORA_R = 32
+LORA_ALPHA = 64
+LORA_DROPOUT = 0.05                      # <--- tunable dropout
+# training hyperparams
+PER_DEVICE_BATCH = 2
+GRAD_ACCUM = 4
+NUM_EPOCHS = 3
+LEARNING_RATE = 2e-4
+WEIGHT_DECAY = 0.01
+WARMUP_RATIO = 0.03
+SAVE_STEPS = 75
+SAVE_TOTAL_LIMIT = 10                    # <--- per your request
+LOGGING_STEPS = 1                        # <--- log every step
+PROJECT = os.environ.get("WANDB_PROJECT", "oss120b-finetune")
+ENTITY = os.environ.get("WANDB_ENTITY", None)  # optional
+
+torch.manual_seed(SEED)
+
 # ---- spawn start method ----
 try:
     mp.set_start_method("spawn", force=True)
 except RuntimeError:
     pass
 
-# ---------------- user/config knobs ----------------
-DATA_PATH = "train_cot_long.jsonl"  # each line: {"messages":[...]}
-MODEL_NAME = "openai/gpt-oss-120b"
-SEED = 3407
-MAX_LEN = 2048                      # fit all but the longest ~0.5%; we will DROP > MAX_LEN
-EXPERTS = False                     # keep False unless you add tiny expert targets
-LORA_R = 32                         # bump if you have headroom
-LORA_ALPHA = 64                     # ~2x r is a good default
-PER_DEVICE_BATCH = 1
-GRAD_ACCUM = 4
-NUM_EPOCHS = 2
-SAVE_STEPS = 100
-SAVE_TOTAL_LIMIT = 3
-LEARNING_RATE = 2e-4
-
-torch.manual_seed(SEED)
-
 # ---------------- tokenizer ----------------
 tok = AutoTokenizer.from_pretrained(MODEL_NAME, use_fast=True)
 tok.pad_token = tok.pad_token or tok.eos_token
-tok.model_max_length = MAX_LEN  # TRL will use this for truncation (but we filter instead)
+tok.model_max_length = MAX_LEN  # we filter so we shouldn't truncate, but keep this aligned
 
 # ---------------- device_map (single-load path) ----------------
 assert torch.cuda.device_count() >= 8, "Need >= 8 GPUs for this script"
-# tighten per-GPU cap so mapper spreads across all 8; no CPU offload by default
 max_memory = {i: "64GiB" for i in range(torch.cuda.device_count())}
-max_memory["cpu"] = "0GiB"  # set to "200GiB" if you want some CPU spill
+max_memory["cpu"] = "0GiB"
 
 cfg = AutoConfig.from_pretrained(MODEL_NAME, trust_remote_code=True)
-
 with init_empty_weights():
     empty = AutoModelForCausalLM.from_config(cfg, trust_remote_code=True)
 
@@ -92,7 +90,7 @@ model = AutoModelForCausalLM.from_pretrained(
     dtype=torch.bfloat16,
     device_map=device_map,
     low_cpu_mem_usage=True,
-    attn_implementation="eager",
+    attn_implementation="eager",  # padding-free/packing disabled below, so eager is safe
 )
 model.gradient_checkpointing_enable()
 model.config.use_cache = False
@@ -100,33 +98,21 @@ print("Device map:", getattr(model, "hf_device_map", device_map))
 
 # ---------------- LoRA ----------------
 attn_targets = ["q_proj", "k_proj", "v_proj", "o_proj", "c_attn", "c_proj"]
-
-target_parameters = None
 if EXPERTS:
-    # If you decide to touch experts later, keep it tiny, e.g. one layer down_proj:
-    # target_parameters = ["23.mlp.experts.down_proj"]  # example
-    # and set LORA_R small (e.g., 2–4) with lora_dropout=0.0
-    raise NotImplementedError("Set EXPERTS=False for this script configuration.")
+    raise NotImplementedError("EXPERTS=False is required here to avoid ParamWrapper OOMs.")
 
 peft_cfg = LoraConfig(
     r=LORA_R,
     lora_alpha=LORA_ALPHA,
-    lora_dropout=0.0,             # required if you later use ParamWrapper targets
+    lora_dropout=LORA_DROPOUT,
     bias="none",
     task_type="CAUSAL_LM",
     target_modules=attn_targets,
-    target_parameters=target_parameters,
+    target_parameters=None,
 )
 model = get_peft_model(model, peft_cfg)
 
-# ===== Inspect model & LoRA targets =====
-def print_model_summary(m):
-    print("\n=== Model module summary (name -> type) ===")
-    for name, mod in m.named_modules():
-        if name == "":
-            continue
-        print(f"{name}: {mod.__class__.__name__}")
-
+# ===== Inspect LoRA targets =====
 def collect_lora_targets(m):
     lora_modules = set()
     lora_params = set()
@@ -134,7 +120,6 @@ def collect_lora_targets(m):
         mod_name = mod.__class__.__name__.lower()
         if hasattr(mod, "lora_A") or hasattr(mod, "lora_B") or "lora" in mod_name:
             lora_modules.add(name)
-        # ParamWrapper targets show up as parametrizations on parameters
         if hasattr(mod, "parametrizations"):
             for p_name in list(getattr(mod, "_parameters", {}).keys()):
                 if p_name in mod.parametrizations:
@@ -142,9 +127,6 @@ def collect_lora_targets(m):
                     if any("lora" in p.__class__.__name__.lower() for p in plist):
                         lora_params.add(f"{name}.{p_name}")
     return sorted(lora_modules), sorted(lora_params)
-
-# Optional: print full module tree (huge). Comment out if too verbose.
-# print_model_summary(model)
 
 lora_mods, lora_param_targets = collect_lora_targets(model)
 print("\n=== LoRA MODULE TARGETS (module-wrapped) ===")
@@ -195,84 +177,92 @@ ds = ds.filter(lambda ex: ex["n_tokens"] <= MAX_LEN)
 print(f"\n=== Filtering by MAX_LEN={MAX_LEN} ===")
 print(f"total: {total_before}  kept: {len(ds)}  dropped: {total_before-len(ds)}  ({(total_before-len(ds))*100.0/total_before:.1f}%)")
 
-# --- optional: preview longest few and median example (save full text) ---
+# --- preview longest few + median + a couple randoms (SAVE full text to files) ---
 os.makedirs("outputs/preview", exist_ok=True)
-sorted_idx = np.argsort(np.array(ds["n_tokens"]))
-if len(sorted_idx):
-    # longest 3
-    for ridx in sorted_idx[-3:][::-1]:
-        tokens = ds[ridx]["n_tokens"]
-        txt = ds[ridx]["text"]
-        path = f"outputs/preview/kept_example_{ridx}_tokens{tokens}.txt"
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(txt)
-        print(f"[saved] {path}")
-    # median
-    mid = sorted_idx[len(sorted_idx)//2]
-    pathm = f"outputs/preview/kept_example_{mid}_tokens{ds[mid]['n_tokens']}_median.txt"
-    with open(pathm, "w", encoding="utf-8") as f:
-        f.write(ds[mid]["text"])
-    print(f"[saved] {pathm}")
+n_tokens = np.array(ds["n_tokens"], dtype=np.int32)
+sorted_idx = np.argsort(n_tokens)
+
+def _save_example(idx, tag):
+    i = int(idx)  # <<< FIX: cast numpy.int64 -> int for datasets indexer
+    tokens = int(ds[i]["n_tokens"])
+    txt = ds[i]["text"]
+    path = f"outputs/preview/full_example_{tag}.txt"
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(txt)
+    print(f"[saved] {path} (tokens={tokens})")
+
+# longest three
+for j, idx in enumerate(sorted_idx[-3:][::-1]):
+    _save_example(idx, f"long_{j}")
+
+# median
+mid = sorted_idx[len(sorted_idx)//2]
+_save_example(mid, "median")
+
+# a couple randoms
+rng = np.random.default_rng(SEED)
+for ridx in rng.choice(sorted_idx, size=min(2, len(sorted_idx)), replace=False):
+    _save_example(ridx, f"rand_{int(ridx)}")
 
 # ---------------- formatting for TRL ----------------
 def formatting_func(example):
-    return example["text"]  # TRL expects str or list[str]; no truncation done here
+    return example["text"]  # TRL expects str or list[str]
 
-# ---------------- TRL config (2 epochs, save every 100 steps) ----------------
+# ---------------- W&B ----------------
+import wandb
+wandb.init(project=PROJECT, entity=ENTITY, config={
+    "model_name": MODEL_NAME,
+    "epochs": NUM_EPOCHS,
+    "per_device_batch_size": PER_DEVICE_BATCH,
+    "grad_accum_steps": GRAD_ACCUM,
+    "lr": LEARNING_RATE,
+    "weight_decay": WEIGHT_DECAY,
+    "warmup_ratio": WARMUP_RATIO,
+    "max_len": MAX_LEN,
+    "lora_r": LORA_R,
+    "lora_alpha": LORA_ALPHA,
+    "lora_dropout": LORA_DROPOUT,
+})
+print(f"W&B run URL: {wandb.run.url}")
+
+# ---------------- TRL config (epochs, save every 100 steps) ----------------
 train_cfg = SFTConfig(
     output_dir="outputs",
     per_device_train_batch_size=PER_DEVICE_BATCH,
     gradient_accumulation_steps=GRAD_ACCUM,
-    num_train_epochs=NUM_EPOCHS,       # <-- epochs, not fixed steps
+    num_train_epochs=NUM_EPOCHS,
     learning_rate=LEARNING_RATE,
     lr_scheduler_type="linear",
-    warmup_ratio=0.03,                 # small ratio when using epochs
-    weight_decay=0.01,
-    logging_steps=10,
+    warmup_ratio=WARMUP_RATIO,
+    weight_decay=WEIGHT_DECAY,
+    logging_steps=LOGGING_STEPS,
+    logging_strategy="steps",
     bf16=True, fp16=False,
     optim="adamw_torch",
     gradient_checkpointing=True,
     group_by_length=True,
     seed=SEED,
-    report_to="none",
-    packing=False,
+    report_to=["wandb"],
+    packing=False,                       # keep False to avoid Flash-Attn requirements
     remove_unused_columns=False,
-    dataloader_num_workers=0,
+    dataloader_num_workers=0,            # safer on SageMaker + huge models
     dataloader_pin_memory=False,
     save_strategy="steps",
     save_steps=SAVE_STEPS,
     save_total_limit=SAVE_TOTAL_LIMIT,
     save_safetensors=True,
+    save_only_model=True,                # save adapter-only at checkpoints
 )
 
-# ---------- Print run config summary before training ----------
-world_size = 1  # single process; model sharded via device_map (no DDP)
-eff_batch_tokens = f"<= {MAX_LEN}"
+# ---------- Print run config summary ----------
+world_size = 1
 updates_per_epoch = math.ceil(len(ds) / (PER_DEVICE_BATCH * GRAD_ACCUM * world_size))
 total_update_steps = updates_per_epoch * NUM_EPOCHS
-
 print("\n=== Run config summary ===")
 print(json.dumps({
-    "model_name": MODEL_NAME,
-    "bf16": True,
-    "epochs": NUM_EPOCHS,
-    "save_steps": SAVE_STEPS,
-    "save_total_limit": SAVE_TOTAL_LIMIT,
-    "per_device_batch_size": PER_DEVICE_BATCH,
-    "grad_accum_steps": GRAD_ACCUM,
-    "world_size_processes": world_size,
-    "effective_batch_size_per_update": PER_DEVICE_BATCH * GRAD_ACCUM * world_size,
-    "max_seq_len_tokens": MAX_LEN,
+    "dataset_examples_after_filter": len(ds),
     "estimated_updates_per_epoch": updates_per_epoch,
     "estimated_total_update_steps": total_update_steps,
-    "dataset_examples_after_filter": len(ds),
-    "lora": {
-        "targets": attn_targets,
-        "r": LORA_R,
-        "alpha": LORA_ALPHA,
-        "dropout": 0.0,
-        "experts": EXPERTS
-    }
 }, indent=2))
 
 print("\n=== TrainingArguments (subset) ===")
@@ -289,5 +279,8 @@ trainer = SFTTrainer(
 
 if __name__ == "__main__":
     trainer.train()
+    # final save: LoRA adapter only
     trainer.model.save_pretrained("outputs/lora_adapter")
     tok.save_pretrained("outputs/lora_adapter")
+    print("Training complete.")
+    print(f"W&B run URL: {wandb.run.url}")
