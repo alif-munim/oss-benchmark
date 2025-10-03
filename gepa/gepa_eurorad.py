@@ -2,21 +2,40 @@
 # -*- coding: utf-8 -*-
 
 """
-Robust GEPA-style evaluation for Eurorad MC tasks.
+Robust GEPA-style evaluation for Eurorad MC tasks with optional few-shot retrieval and majority voting.
+
+Key features:
 - Label-only metric (default)
 - Optional GEPA with required reflection LM
-- Warmup ping and tolerant LM wrapper
+- Warmup ping and tolerant LM wrapper (no _settings override)
 - Skippable base evaluation (--skip-base-eval)
+- Few-shot retrieval (--fewshot-k with inclusion control)
+- Majority vote / self-consistency (--vote-k)
+- Toggle progress bars (--no-progress)
+- Deterministic per-example JSONL dump (--out-jsonl)
+
+Example:
+python gepa_eurorad.py \
+  --hf-dataset alif-munim/eurorad-omar-120b \
+  --model openai/gpt-4.1-mini \
+  --reflection-model openai/gpt-4.1-mini \
+  --use-gepa --gepa-budget medium \
+  --fewshot-k 3 --fewshot-include both \
+  --vote-k 5 \
+  --skip-base-eval \
+  --out-jsonl outputs/run1.jsonl
 """
 
 import os
 import sys
 import time
+import json
+import math
 import random
 import signal
 import logging
 import argparse
-from typing import Any, Optional, List
+from typing import Any, Optional, List, Tuple
 
 import dspy
 from datasets import load_dataset
@@ -54,7 +73,7 @@ def openai_ping(model: str, timeout: float) -> tuple[bool, Optional[str]]:
     except Exception as e:
         return False, repr(e)
 
-# ---------- Robust LM wrapper ----------
+# ---------- Robust LM wrapper (no _settings override) ----------
 class RobustWrappedLM(dspy.BaseLM):
     """
     Tolerant wrapper that:
@@ -66,8 +85,16 @@ class RobustWrappedLM(dspy.BaseLM):
                  jitter: float = 0.25, retry_on_5xx: bool = True):
         if not isinstance(inner_lm, dspy.BaseLM):
             raise TypeError(f"inner_lm must be dspy.BaseLM, got {type(inner_lm)}")
-        settings = getattr(inner_lm, "_settings", {}) or {}
-        super().__init__(model=settings.get("model", "wrapped-lm"))
+
+        model_name = getattr(inner_lm, "model", None)
+        if not model_name:
+            try:
+                s = getattr(inner_lm, "_settings", None)
+                model_name = getattr(s, "model", None)
+            except Exception:
+                pass
+        super().__init__(model=model_name or "wrapped-lm")
+
         self.inner = inner_lm
         self.max_retries = max_retries
         self.base_backoff = base_backoff
@@ -76,9 +103,7 @@ class RobustWrappedLM(dspy.BaseLM):
         self.retry_on_5xx = retry_on_5xx
         self.retry_on = (RateLimitError, APITimeoutError)
 
-    @property
-    def _settings(self):
-        return getattr(self.inner, "_settings", {}) or {"model": getattr(self, "model", "wrapped-lm")}
+    # Do NOT override _settings
 
     def __call__(self, *args, **kwargs):
         return self._run(*args, **kwargs)
@@ -89,11 +114,13 @@ class RobustWrappedLM(dspy.BaseLM):
     def _run(self, *args, **kwargs):
         prompts = None
         messages = None
+
         if args:
             if len(args) == 1 and isinstance(args[0], (list, str)):
                 prompts = args[0]
-            elif args:
+            else:
                 prompts = args[0]
+
         if "prompts" in kwargs and kwargs["prompts"] is not None:
             prompts = kwargs["prompts"]
         if "messages" in kwargs and kwargs["messages"] is not None:
@@ -102,16 +129,16 @@ class RobustWrappedLM(dspy.BaseLM):
         def inner_call():
             if hasattr(self.inner, "generate"):
                 if messages is not None:
-                    return self.inner.generate(messages=messages)
+                    return self.inner.generate(messages=messages, **{k:v for k,v in kwargs.items() if k!="messages"})
                 if prompts is not None:
-                    return self.inner.generate(prompts)
-                return self.inner.generate([])
+                    return self.inner.generate(prompts, **{k:v for k,v in kwargs.items() if k!="prompts"})
+                return self.inner.generate([], **kwargs)
             else:
                 if messages is not None:
-                    return self.inner(messages=messages)
+                    return self.inner(messages=messages, **{k:v for k,v in kwargs.items() if k!="messages"})
                 if prompts is not None:
-                    return self.inner(prompts)
-                return self.inner([])
+                    return self.inner(prompts, **{k:v for k,v in kwargs.items() if k!="prompts"})
+                return self.inner([], **kwargs)
 
         for attempt in range(self.max_retries + 1):
             try:
@@ -126,13 +153,10 @@ class RobustWrappedLM(dspy.BaseLM):
                     time.sleep(self._sleep_time(attempt))
                 else:
                     raise
-            except Exception:
-                raise
 
     def _sleep_time(self, attempt: int) -> float:
-        import random as _r
         backoff = min(self.base_backoff * (2 ** attempt), self.backoff_cap)
-        factor = 1.0 + _r.uniform(-self.jitter, self.jitter)
+        factor = 1.0 + random.uniform(-self.jitter, self.jitter)
         return max(0.05, backoff * factor)
 
 # ---------- Signature & Program ----------
@@ -142,13 +166,53 @@ class DiagnoseSig(dspy.Signature):
     final_answer = dspy.OutputField(desc="Return exactly one option from the list above, copied verbatim.")
 
 class EuroradProgram(dspy.Module):
-    def __init__(self):
+    """
+    Optionally inject few-shot exemplars and support vote-k majority voting.
+    """
+    def __init__(self, vote_k: int = 1, instruction_preamble: Optional[str] = None):
         super().__init__()
         self.solve = dspy.ChainOfThought(DiagnoseSig)
+        self.vote_k = max(1, int(vote_k))
+        self.instruction_preamble = instruction_preamble or (
+            "Task: Select and return exactly ONE diagnosis from the candidate list, copied verbatim. "
+            "Do not include any extra words or punctuation."
+        )
+
+        # few-shot exemplars are set externally via set_fewshot_examples()
+        self._fewshot_block = ""
+
+    def set_fewshot_examples(self, examples_text_block: str):
+        self._fewshot_block = examples_text_block or ""
+
+    def _format_input(self, text: str) -> str:
+        parts = [self.instruction_preamble]
+        if self._fewshot_block:
+            parts.append("\n### Examples\n" + self._fewshot_block.strip())
+        parts.append("\n### Case\n" + text.strip())
+        return "\n\n".join(parts).strip()
 
     def forward(self, text: str):
-        out = self.solve(text=text)
-        return dspy.Prediction(final_answer=out.final_answer)
+        prompt = self._format_input(text)
+        if self.vote_k == 1:
+            out = self.solve(text=prompt)
+            return dspy.Prediction(final_answer=out.final_answer)
+
+        # Majority vote with K samples
+        votes = []
+        for _ in range(self.vote_k):
+            out = self.solve(text=prompt)
+            votes.append(str(getattr(out, "final_answer", "")).strip())
+        best = self._majority(votes)
+        return dspy.Prediction(final_answer=best)
+
+    @staticmethod
+    def _majority(items: List[str]) -> str:
+        from collections import Counter
+        c = Counter([i for i in items if i])
+        if not c:
+            return ""
+        most_common, _ = c.most_common(1)[0]
+        return most_common
 
 # ---------- Metrics ----------
 def normalize(s: Any) -> str:
@@ -217,6 +281,128 @@ def split_dataset(hf_dataset: str, text_field: str, label_field: str, solution_f
 
     return to_examples(rows[:tr]), to_examples(rows[tr:tr+va]), to_examples(rows[tr+va:tr+va+te])
 
+# ---------- Few-shot retrieval (lexical Jaccard) ----------
+def _tokenize(s: str) -> set:
+    return set([t for t in "".join([c.lower() if c.isalnum() else " " for c in s]).split() if t])
+
+def jaccard(a: set, b: set) -> float:
+    if not a or not b:
+        return 0.0
+    inter = len(a & b)
+    if inter == 0:
+        return 0.0
+    return inter / float(len(a | b))
+
+def build_fewshot_block(
+    query_text: str,
+    pool: List[dspy.Example],
+    k: int,
+    include_mode: str,
+    label_field: str,
+    solution_field: str,
+) -> Tuple[str, List[int]]:
+    """
+    include_mode in {"input", "label", "reasoning", "both"}:
+      - "input": only include the input text (no answers), for pattern priming
+      - "label": include input + the gold final_answer
+      - "reasoning": include input + rationale
+      - "both": include input + rationale + final_answer
+    """
+    k = max(0, int(k))
+    if k == 0 or not pool:
+        return "", []
+
+    qtok = _tokenize(query_text)
+    scored = []
+    for idx, ex in enumerate(pool):
+        itok = _tokenize(getattr(ex, "text", ""))
+        scored.append((jaccard(qtok, itok), idx))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    take = [idx for _, idx in scored[:k]]
+
+    lines = []
+    for i, idx in enumerate(take, start=1):
+        ex = pool[idx]
+        text = getattr(ex, "text", "").strip()
+        label = getattr(ex, label_field, "").strip()
+        sol = getattr(ex, solution_field, "").strip()
+
+        section = [f"Example {i}"]
+        section.append(f"Case:\n{text}")
+        if include_mode in ("label", "both"):
+            section.append(f"Gold diagnosis:\n{label}")
+        if include_mode in ("reasoning", "both"):
+            # keep short: cap very long rationales
+            if len(sol) > 2000:
+                sol = sol[:2000] + " …"
+            section.append(f"Why (summary):\n{sol if sol else '(not provided)'}")
+        lines.append("\n".join(section).strip())
+
+    block = "\n\n---\n\n".join(lines)
+    return block, take
+
+# ---------- Utility: structured eval & dump ----------
+def run_and_dump_jsonl(
+    prog: EuroradProgram,
+    dataset: List[dspy.Example],
+    label_field: str,
+    solution_field: str,
+    out_path: Optional[str] = None,
+    fewshot_cfg: Optional[dict] = None,
+) -> dict:
+    """
+    Runs the program over dataset, computes metric, and optionally writes JSONL.
+    Returns summary dictionary.
+    """
+    metric_fn = label_only_metric_with_feedback_factory(label_field, solution_field)
+    rows = []
+    n_correct = 0
+
+    for ex in dataset:
+        text = getattr(ex, "text", "")
+        gold = getattr(ex, label_field, "")
+        sol = getattr(ex, solution_field, "")
+
+        # (Re)build few-shot block per-item to avoid leaking info across queries
+        if fewshot_cfg:
+            block, _ = build_fewshot_block(
+                query_text=text,
+                pool=fewshot_cfg["pool"],
+                k=fewshot_cfg["k"],
+                include_mode=fewshot_cfg["include"],
+                label_field=label_field,
+                solution_field=solution_field,
+            )
+            prog.set_fewshot_examples(block)
+        else:
+            prog.set_fewshot_examples("")
+
+        pred = prog(text=text)
+        pred_raw = getattr(pred, "final_answer", "")
+        m = metric_fn(ex, pred)
+
+        n_correct += int(getattr(m, "score", 0.0) > 0.5)
+        rows.append({
+            "text": text,
+            "example_final_answer": gold,
+            "reasoning": sol,
+            "pred_final_answer": pred_raw,
+            "metric_score": getattr(m, "score", 0.0),
+            "metric_feedback": getattr(m, "feedback", ""),
+        })
+
+    acc = n_correct / max(1, len(dataset))
+    summary = {"count": len(dataset), "correct": n_correct, "accuracy": acc}
+
+    if out_path:
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        with open(out_path, "w", encoding="utf-8") as f:
+            for r in rows:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        log.info("Wrote detailed predictions to %s", out_path)
+
+    return summary
+
 # ---------- Main ----------
 def main():
     ap = argparse.ArgumentParser()
@@ -244,7 +430,16 @@ def main():
     ap.add_argument("--num-threads", type=int, default=6)
     ap.add_argument("--timeout", type=float, default=30.0)
     ap.add_argument("--max-tokens", type=int, default=2048)
+    ap.add_argument("--temperature", type=float, default=0.2)
     ap.add_argument("--warmup", type=int, default=1)
+    ap.add_argument("--no-progress", action="store_true", help="Disable progress bars / tables during DSPy eval")
+
+    # Few-shot & voting
+    ap.add_argument("--fewshot-k", type=int, default=0, help="Number of retrieved few-shot exemplars per case")
+    ap.add_argument("--fewshot-include", type=str, default="label",
+                    choices=["input", "label", "reasoning", "both"],
+                    help="What to include in the few-shot exemplars")
+    ap.add_argument("--vote-k", type=int, default=1, help="Self-consistency: number of votes to sample per case")
 
     # GEPA options
     ap.add_argument("--use-gepa", action="store_true")
@@ -256,6 +451,10 @@ def main():
     # Control flow
     ap.add_argument("--skip-base-eval", action="store_true",
                     help="Skip the initial unoptimized evaluation")
+
+    # Outputs
+    ap.add_argument("--out-jsonl", type=str, default=None,
+                    help="Write per-example predictions to this JSONL")
 
     args = ap.parse_args()
 
@@ -270,6 +469,7 @@ def main():
         api_key=os.environ.get("OPENAI_API_KEY"),
         request_timeout=args.timeout,
         max_tokens=args.max_tokens,
+        temperature=args.temperature,
     )
     base_lm = RobustWrappedLM(base_inner)
     dspy.configure(lm=base_lm)
@@ -302,9 +502,9 @@ def main():
         sys.exit(1)
 
     # Warmup through pipeline
-    if args.warmup > 0:
+    if args.warmup > 0 and len(testset) > 0:
         log.info(f"Warmup: running {args.warmup} sample(s) through the program…")
-        p = EuroradProgram()
+        p = EuroradProgram(vote_k=max(1, args.vote_k))
         for i in range(min(args.warmup, len(testset))):
             _ = p(text=testset[i].text)
 
@@ -312,19 +512,28 @@ def main():
     metric_fn = label_only_metric_with_feedback_factory(args.label_field, args.solution_field)
 
     def evaluate_prog(prog, tag=""):
-        kwargs = dict(num_threads=args.num_threads, display_progress=True, display_table=5, max_errors=100)
+        kwargs = dict(
+            num_threads=args.num_threads,
+            display_progress=not args.no_progress,
+            display_table=0 if args.no_progress else 5,
+            max_errors=100,
+            provide_traceback=True,   # show useful errors instead of swallowing them
+        )
         evaluate = dspy.Evaluate(metric=metric_fn, devset=testset, **kwargs)
         log.info(f"Evaluating {tag or 'program'}…")
         return evaluate(prog)
 
+    # Prepare a base program with voting and (later) few-shot injection
+    base_prog = EuroradProgram(vote_k=max(1, args.vote_k))
+
     # 1) Optional base eval
     if not args.skip_base_eval:
-        base_prog = EuroradProgram()
         _ = evaluate_prog(base_prog, tag="unoptimized")
     else:
         log.info("Skipping unoptimized evaluation (--skip-base-eval).")
 
     # 2) Optional GEPA optimization
+    optimized_prog = None
     if args.use_gepa:
         from dspy import GEPA
         log.info("Starting GEPA optimization…")
@@ -342,16 +551,16 @@ def main():
         if args.gepa_max_full_evals > 0:
             gepa_kwargs["max_full_evals"] = args.gepa_max_full_evals
         else:
-            # Map 'auto' -> a valid preset (medium) to satisfy DSPy
+            # Map 'auto' -> 'medium' to satisfy DSPy versions that require a fixed preset
             preset = args.gepa_budget
             if preset == "auto":
                 preset = "medium"
-                log.info("Mapping --gepa-budget auto -> 'medium' preset for this DSPy version.")
+                log.info("Mapping --gepa-budget auto -> 'medium'.")
             gepa_kwargs["auto"] = preset
 
         compiler = GEPA(**gepa_kwargs)
         optimized_prog = compiler.compile(
-            student=EuroradProgram(),
+            student=EuroradProgram(vote_k=max(1, args.vote_k)),
             trainset=trainset if len(trainset) > 0 else devset,
             valset=devset if len(devset) > 0 else testset,
         )
@@ -359,6 +568,31 @@ def main():
     else:
         if args.skip_base_eval:
             log.info("Nothing else to run (skipped base eval and GEPA disabled).")
+
+    # ---------- Final explicit evaluation & JSONL dump ----------
+    final_prog = optimized_prog or base_prog
+
+    # Few-shot config for the explicit dump loop
+    fewshot_cfg = None
+    if args.fewshot_k > 0 and len(trainset) > 0:
+        fewshot_cfg = dict(
+            pool=trainset,
+            k=args.fewshot_k,
+            include=args.fewshot_include,
+        )
+        log.info("Few-shot retrieval enabled: k=%d, include=%s", args.fewshot_k, args.fewshot_include)
+
+    summary = run_and_dump_jsonl(
+        prog=final_prog,
+        dataset=testset,
+        label_field=args.label_field,
+        solution_field=args.solution_field,
+        out_path=args.out_jsonl,
+        fewshot_cfg=fewshot_cfg,
+    )
+
+    log.info("Final explicit test accuracy: %.2f%% (%d/%d)",
+             100.0 * summary["accuracy"], summary["correct"], summary["count"])
 
 if __name__ == "__main__":
     signal.signal(signal.SIGINT, lambda sig, frame: sys.exit(130))

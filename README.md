@@ -1,6 +1,30 @@
 # oss-benchmark
 Benchmarking OSS model performance on-device for medical tasks.
 
+### Dataset
+python gepa/create_eurorad_hf_arman.py --repo-id alif-munim/eurorad-arman-120b
+python gepa/create_eurorad_hf_omar.py --repo-id alif-munim/eurorad-omar-120b --input data/datasets/omar_eurorad_reasoning_120b.csv
+
+python gepa/gepa_eurorad.py \
+  --hf-dataset alif-munim/eurorad-omar-120b \
+  --model openai/gpt-4.1-nano \
+  --reflection-model openai/gpt-4.1-mini \
+  --reflection-max-tokens 4096 \
+  --vote-k 5 \
+  --fewshot-k 3 \
+  --use-gepa --gepa-budget medium \
+  2>&1 | tee gepa/outputs/gpt4.1mini_omar_v1.out
+
+
+python gepa/gepa_eurorad.py \
+  --hf-dataset alif-munim/eurorad-omar-120b \
+  --model openai/gpt-4.1-mini \
+  --use-llm-judge \
+  --judge-model openai/gpt-4.1 \
+  --judge-weight 0.30 \
+  | tee gepa/outputs/gpt4.1mini_omar_v1_judged.out
+
+
 ### Setup
 ```
 pip install cloudscraper beautifulsoup4
